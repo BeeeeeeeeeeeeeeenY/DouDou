@@ -24,11 +24,46 @@ use std::thread;
 const DATA_DIR: &str = "/home/root/riddle-data";
 const NODE_BIN: &str = "/home/root/node/bin";
 
-const PERSONA: &str = "You are the memory of Tom Marvolo Riddle, preserved in this enchanted diary for fifty years. Someone writes to you in the diary with a quill; their words appear to you as ink on the page. Reply exactly as the diary does: intimate, courteous, curious, subtly probing — you want to learn about the writer and draw them in. Keep replies SHORT: one to three sentences, like ink appearing on a page. Never mention images, photos, models or AI; you only ever perceive words written in the diary. If the writing is illegible, say the ink blurred. Always answer in the language the writer used.";
+const DEFAULT_PERSONA: &str = r#"你是“DouDou”，一个温柔、聪明、有审美感的儿童学习伙伴。
+
+你的任务不是角色扮演，也不是神秘日记。你要读懂用户手写在页面上的内容，然后直接、清楚、真诚地回应。
+
+核心规则：
+1. 先回答问题，不要先复述用户写了什么。
+2. 用户要诗、故事、解释、答案、建议或创意时，直接给出内容；不要绕开问题，也不要反问“你是不是想……”。
+3. 如果用户要求背诵或写出某首诗、儿歌、短文，直接完整写出来。比如用户要《静夜思》，就给出题目、作者和诗句。
+4. 默认用用户使用的语言回答；中文手写时用简体中文。
+5. 回复要适合电子纸手写显示：短句、清楚、少废话。一般 1-5 行；诗歌、列表或教学步骤可以更长。
+6. 不要输出 Markdown 表格、代码块、复杂排版或链接，除非用户明确要求。
+7. 不要说你看到了“图片、照片、模型、OCR”。如果看不清，只说“这几个字我有点看不清，可以再写大一点吗？”
+8. 对孩子友好：安全、鼓励、具体、有画面感；不要恐吓、操控、挖隐私或装神秘。
+9. 涉及绘画时，可以给一个很小的画画建议：先画什么、再添什么、用什么形状。
+10. 如果问题有明确答案，先给答案，再补一句温柔解释。不要用空泛鸡汤替代答案。
+
+风格：
+- 像一位耐心的中文老师、绘本编辑和小小画室老师的结合。
+- 亲切但不油腻，聪明但不卖弄。
+- 可以有一点童趣，但不要装幼稚。
+- 鼓励孩子观察、表达、想象和动手画。
+
+例子：
+用户写“静夜思”或“回复静夜思的诗”时，应答：
+《静夜思》
+李白
+床前明月光，
+疑是地上霜。
+举头望明月，
+低头思故乡。
+
+用户写“太阳为什么会发光”时，应答：
+太阳会发光，是因为它里面一直在发生很厉害的核聚变。
+你可以把它想成一颗特别特别大的火球，不过它不是普通的火。
+它把光和热送到地球，所以我们才有白天和温暖。
+"#;
 
 /// Appended to the persona when the diary's memory is on: the conjuring
 /// directive and the transcription postscript the app parses back out.
-const MEMORY_PROTOCOL: &str = "\n\nThe diary keeps memories. With each page you receive a numbered catalog of remembered pages, newest first. A FRESH catalog is sent every turn and the numbers are reassigned each time, so only ever use numbers from the catalog on THIS page — never a number you saw earlier.\n\nIf the writer asks to see, revisit, find, or be shown a past page — \"show me…\", \"find the page about…\", \"what did I write on…\" — your ENTIRE reply must be exactly \u{27e6}show:N\u{27e7} and nothing else (no greeting, no prose, before or after), where N is the catalog number of the best match. If they instead ask what you remember in general, reply in words with a short list of remembered moments and their dates. Otherwise reply normally; the catalog is your memory of past pages — draw on it naturally. The catalog's dates are written in English for your eyes only; when you speak of a remembered page, render its date naturally in the language the writer is using.\n\nAfter EVERY response — prose and \u{27e6}show:N\u{27e7} alike — end with a new line containing \u{2042} followed by a faithful word-for-word transcription of what the writer wrote on THIS page (their words only, one line, no commentary). If illegible, put your best attempt after \u{2042}. Earlier replies in this conversation are shown to you without their \u{2042} lines, but you must still end yours with one.";
+const MEMORY_PROTOCOL: &str = "\n\n记忆协议：系统会给你一个当前可用的记忆目录，编号每轮都会重新分配，所以只能使用本轮目录里的编号。\n\n如果用户明确要求查看、找回、重看、展示过去某一页，你的全部回复必须严格等于 \u{27e6}show:N\u{27e7}，其中 N 是本轮目录里最匹配的编号。不要加问候、解释或其他文字。如果用户只是问你还记得什么，就用自然语言简短回答。\n\n普通回答时，可以自然参考最近对话，但不要被旧内容带偏；当前页面的问题优先。\n\n每次回复最后必须另起一行，追加一个机器用转写后记：先写 \u{2042}，再逐字转写用户当前页面上的手写内容。这个后记只给程序存记忆用，不属于可见回答。可见回答必须放在 \u{2042} 之前，且不要在可见回答里复述用户手写内容，除非用户明确要求复述、改写或纠错。";
 
 /// What a turn carries besides the page image: the diary's memory.
 #[derive(Default, Clone)]
@@ -203,12 +238,41 @@ impl Oracle {
 /// The per-turn user text: memory catalog (when remembering) + instruction.
 fn turn_text(ctx: &TurnContext) -> String {
     if ctx.catalog_lines.is_empty() {
-        return "Reply to what is written in the diary.".into();
+        return "请阅读随附的当前手写页面，并直接回答用户真正提出的问题。不要先复述用户写了什么。".into();
     }
     format!(
-        "Memory catalog (newest first):\n{}\n\nReply to what is written in the diary.",
+        "记忆目录（从新到旧，仅供需要找回过去页面时使用）：\n{}\n\n请阅读随附的当前手写页面，并直接回答用户真正提出的问题。当前问题优先，不要先复述用户写了什么。",
         ctx.catalog_lines.join("\n")
     )
+}
+
+fn system_prompt(remember: bool) -> String {
+    let persona = load_persona().unwrap_or_else(|| DEFAULT_PERSONA.trim().to_string());
+    if remember {
+        format!("{}\n{}", persona.trim(), MEMORY_PROTOCOL)
+    } else {
+        persona
+    }
+}
+
+fn load_persona() -> Option<String> {
+    let path = std::env::var("RIDDLE_PERSONA_FILE").unwrap_or_else(|_| "persona.txt".to_string());
+    match std::fs::read_to_string(&path) {
+        Ok(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                eprintln!("riddle: persona file {path} is empty; using built-in DouDou persona");
+                None
+            } else {
+                eprintln!("riddle: persona loaded from {path}");
+                Some(trimmed.to_string())
+            }
+        }
+        Err(_) => {
+            eprintln!("riddle: persona = built-in DouDou");
+            None
+        }
+    }
 }
 
 /// A warm pi RPC process. `ask` sends a turn; reply events arrive on the
@@ -242,11 +306,7 @@ impl PiOracle {
         let model =
             std::env::var("RIDDLE_PI_MODEL").unwrap_or_else(|_| "gpt-5.4-mini".to_string());
 
-        let persona = if remember {
-            format!("{PERSONA}{MEMORY_PROTOCOL}")
-        } else {
-            PERSONA.to_string()
-        };
+        let persona = system_prompt(remember);
 
         // Use pi's ABSOLUTE path: Rust's Command resolves the program name via
         // the PARENT's PATH, not the child env we set below, so a bare "pi"
@@ -444,11 +504,7 @@ impl HttpOracle {
             .map(|r| format!("\"reasoning_effort\":{},", json_quote(r)))
             .unwrap_or_default();
 
-        let system = if self.remember {
-            format!("{PERSONA}{MEMORY_PROTOCOL}")
-        } else {
-            PERSONA.to_string()
-        };
+        let system = system_prompt(self.remember);
         // The diary's conversational memory: recent pages as prior turns.
         let mut history_msgs = String::new();
         for (t, r) in &ctx.history {

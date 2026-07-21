@@ -13,7 +13,7 @@ mkdir -p dist/riddle
 install -m 755 "$BIN" dist/riddle/riddle
 install -m 755 ../quill/build/libquill.so dist/riddle/
 install -m 755 scripts/appload-launch.sh scripts/riddle-takeover.sh dist/riddle/
-install -m 644 external.manifest.json icon.png oracle.env.example settings.schema.json dist/riddle/
+install -m 644 external.manifest.json icon.png oracle.env.example persona.txt settings.schema.json dist/riddle/
 
 echo "staged: $(du -sh dist/riddle | cut -f1) in dist/riddle/"
 echo "publish with: remagic publish dist/riddle -catalog-dir <remagic checkout>"
