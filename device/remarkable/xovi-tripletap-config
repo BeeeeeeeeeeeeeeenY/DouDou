@@ -1,0 +1,12 @@
+# Safe untethered Xovi control for this Riddle demo.
+# Three quick power-button presses recover any stale Riddle session and start
+# the lightweight Xovi launcher. Rebooting still returns to the stock OS.
+
+ENABLE_VERSION_SWITCHING=false
+TRIGGER_ACTION="start"
+TIME_THRESHOLD=2
+REQUIRED_PRESSES=3
+PRE_START_COMMANDS=(
+    "systemctl stop riddle-takeover.service 2>/dev/null || true"
+)
+POST_START_COMMANDS=()

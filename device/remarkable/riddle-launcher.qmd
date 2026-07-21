@@ -1,0 +1,44 @@
+; Riddle-only launcher for reMarkable Paper Pro OS 3.27.
+; This deliberately avoids AppLoad's full-screen launcher and touch-event layer.
+
+AFFECT [[4911547370760691430]]
+    IMPORT net.asivery.CommandExecutor [[180922.180921]]
+
+    TRAVERSE [[3819512207256720568]]
+        LOCATE BEFORE ALL
+        INSERT {
+            AsyncCommandExecutor {
+                id: riddleCommand
+                command: "/home/root/xovi/exthome/appload/riddle/appload-launch.sh"
+            }
+        }
+    END TRAVERSE
+
+    TRAVERSE [[3819512207256720568]] > [[14125623155555875541]]#[[15885405667098360701]]
+        LOCATE AFTER [[3819512207256720568]]#[[4073320026945606142]]
+        INSERT {
+            ~&16385778650434842232&~ {
+                ~&5972374&~: openRiddle
+                ~&8399878573055752961&~: "openRiddle"
+                ~&214642559243&~: "Riddle"
+                ~&8399601734642709923&~: "file:///home/root/xovi/exthome/appload/riddle/icon.png"
+                ~&7082453764421&~: ~&214625660372&~
+                ~&233726547792244&~: ~&6504329801&~
+                ~&254542236275632405&~: {
+                    if (!riddleCommand.running) {
+                        riddleCommand.startCommand(1000);
+                    }
+                }
+                ~&7081629735527&~.~&17520348323745447649&~: ~&7082020628281&~.~&15061686673205541622&~
+                ~&7081629735527&~.~&7797818826744279624&~: ~&7083038346995&~.~&214646099849&~
+                ~&11921478716705041271&~: ~&6504254477&~
+            }
+        }
+    END TRAVERSE
+
+    TRAVERSE [[3819512207256720568]]#[[6504254477]]
+        REBUILD [[15578034235503008618]]
+            LOCATE AFTER STREAM \~&16045040163728568448&~\ INSERT STREAM \, openRiddle\
+        END REBUILD
+    END TRAVERSE
+END AFFECT

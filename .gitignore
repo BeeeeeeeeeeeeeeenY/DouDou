@@ -1,0 +1,25 @@
+.DS_Store
+
+# Secrets and local runtime config
+.env
+.env.*
+*.local
+oracle.env
+device/riddle/oracle.env
+
+# Build outputs
+target/
+dist/
+build/
+*.log
+
+# Device/SDK artifacts
+work/
+*.img
+*.bin
+*.elf
+
+# Font binaries are kept local until redistribution rights are confirmed.
+device/riddle/fonts/*.ttf
+!device/riddle/fonts/README.md
+

@@ -1,0 +1,163 @@
+#!/bin/zsh
+
+# Stable Mac-side command for controlling Riddle on a reMarkable Paper Pro.
+# It intentionally keeps all credentials on the Mac and never prints oracle.env.
+
+set -u
+
+SSH_KEY="${RIDDLE_SSH_KEY:-/Users/ben/.ssh/remarkable_paper_pro}"
+KNOWN_HOSTS="${RIDDLE_KNOWN_HOSTS:-/Users/ben/.ssh/known_hosts_remarkable}"
+DEVICE_IP="${RIDDLE_DEVICE_IP:-10.11.99.1}"
+DEVICE="root@${DEVICE_IP}"
+SERVICE="riddle-takeover.service"
+OFFICIAL_SERVICE="xochitl.service"
+LAUNCHER="/home/root/xovi/exthome/appload/riddle/appload-launch.sh"
+
+typeset -a SSH_ARGS
+SSH_ARGS=(
+  -i "$SSH_KEY"
+  -o BatchMode=yes
+  -o ConnectTimeout=8
+  -o ServerAliveInterval=3
+  -o ServerAliveCountMax=2
+  -o StrictHostKeyChecking=yes
+  -o UserKnownHostsFile="$KNOWN_HOSTS"
+)
+
+usage() {
+  cat <<'EOF'
+用法：riddle <命令>
+
+  start    打开中文 Riddle
+  stop     退出 Riddle，恢复 reMarkable 官方界面
+  restart  重启 Riddle
+  status   查看当前运行状态
+  logs     查看最近 80 行运行日志
+  help     显示本帮助
+
+说明：设备锁屏或休眠时，请先按一下电源键唤醒，再执行命令。
+EOF
+}
+
+fail() {
+  print -u2 -- "错误：$*"
+  return 1
+}
+
+remote() {
+  ssh "${SSH_ARGS[@]}" "$DEVICE" "$@"
+}
+
+ensure_connection() {
+  [[ -f "$SSH_KEY" ]] || fail "找不到 SSH 密钥：$SSH_KEY" || return 1
+  [[ -f "$KNOWN_HOSTS" ]] || fail "找不到设备主机记录：$KNOWN_HOSTS" || return 1
+
+  local reply
+  if ! reply="$(remote 'printf connected' 2>&1)"; then
+    print -u2 -- "$reply"
+    fail "无法连接 reMarkable。请确认 USB 已连接、设备已开机且没有处于锁屏休眠状态。"
+    return 1
+  fi
+}
+
+riddle_state() {
+  remote "systemctl is-active $SERVICE 2>/dev/null || true"
+}
+
+official_state() {
+  remote "systemctl is-active $OFFICIAL_SERVICE 2>/dev/null || true"
+}
+
+show_status() {
+  ensure_connection || return 1
+
+  local riddle_status official_status
+  riddle_status="$(riddle_state)"
+  official_status="$(official_state)"
+
+  print -- "设备：      已连接（$DEVICE_IP）"
+  print -- "Riddle：    $riddle_status"
+  print -- "官方界面：  $official_status"
+
+  if [[ "$riddle_status" == "active" ]]; then
+    print -- "当前可以使用 Riddle；五指同时轻触可退出。"
+  elif [[ "$official_status" == "active" ]]; then
+    print -- "当前处于 reMarkable 官方界面。"
+  else
+    print -- "两个界面都未运行，建议执行：riddle restart"
+  fi
+}
+
+start_riddle() {
+  ensure_connection || return 1
+
+  local state output
+  state="$(riddle_state)"
+  if [[ "$state" == "active" ]]; then
+    print -- "中文 Riddle 已经在运行。"
+    return 0
+  fi
+
+  print -- "正在启动中文 Riddle……"
+  if ! output="$(remote "systemctl reset-failed $SERVICE 2>/dev/null || true; $LAUNCHER" 2>&1)"; then
+    print -u2 -- "$output"
+    fail "Riddle 启动命令执行失败。可运行 riddle logs 查看原因。"
+    return 1
+  fi
+
+  sleep 1
+  state="$(riddle_state)"
+  if [[ "$state" != "active" ]]; then
+    print -u2 -- "$output"
+    fail "Riddle 没有保持运行。可运行 riddle logs 查看原因。"
+    return 1
+  fi
+
+  print -- "中文 Riddle 已打开。五指同时轻触可退出；请勿用电源键锁屏。"
+}
+
+stop_riddle() {
+  ensure_connection || return 1
+
+  print -- "正在退出 Riddle，并恢复官方界面……"
+  if ! remote "systemctl stop $SERVICE 2>/dev/null || true; systemctl start $OFFICIAL_SERVICE"; then
+    fail "恢复官方界面失败。"
+    return 1
+  fi
+
+  sleep 1
+  local official_status
+  official_status="$(official_state)"
+  if [[ "$official_status" != "active" ]]; then
+    fail "官方界面当前状态为 $official_status。请执行 riddle status 或重启设备。"
+    return 1
+  fi
+
+  print -- "已恢复 reMarkable 官方界面。"
+}
+
+restart_riddle() {
+  stop_riddle || return 1
+  sleep 2
+  start_riddle
+}
+
+show_logs() {
+  ensure_connection || return 1
+  remote "journalctl -u $SERVICE -n 80 --no-pager"
+}
+
+command_name="${1:-help}"
+case "$command_name" in
+  start) start_riddle ;;
+  stop) stop_riddle ;;
+  restart) restart_riddle ;;
+  status) show_status ;;
+  logs) show_logs ;;
+  help|-h|--help) usage ;;
+  *)
+    print -u2 -- "未知命令：$command_name"
+    usage
+    exit 2
+    ;;
+esac
