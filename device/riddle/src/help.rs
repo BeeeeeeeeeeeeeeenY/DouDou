@@ -145,16 +145,25 @@ pub struct Help {
 /// touchscreen (5-finger exit) and the power button.
 pub fn show(surf: &mut Surface, font: &script::FontStack<'_>, takeover: bool) -> Help {
     let body = if takeover { BODY_TAKEOVER } else { BODY_WINDOWED };
-    let title_h = (TITLE_PX * 1.4) as usize;
-    let line_h = (BODY_PX * 1.3) as usize;
-    let footer_h = (FOOTER_PX * 1.4) as usize;
 
-    let mut wmax = script::measure(font, TITLE, TITLE_PX);
-    for l in body {
-        wmax = wmax.max(script::measure(font, l, BODY_PX));
+    let title = line_size(font, TITLE, TITLE_PX);
+    let footer = line_size(font, FOOTER, FOOTER_PX);
+    let body_sizes: Vec<(usize, usize)> = body
+        .iter()
+        .map(|line| if line.is_empty() { (0, 0) } else { line_size(font, line, BODY_PX) })
+        .collect();
+
+    let mut wmax = title.0.max(footer.0);
+    let mut body_h = (BODY_PX * 1.45) as usize;
+    for &(w, h) in &body_sizes {
+        wmax = wmax.max(w);
+        body_h = body_h.max(h + 10);
     }
-    let pw = (wmax as usize + 2 * PAD).min(SCREEN_W - 40);
-    let ph = PAD + title_h + line_h / 2 + body.len() * line_h + footer_h + PAD;
+
+    let title_h = title.1 + 18;
+    let footer_h = footer.1 + 12;
+    let pw = (wmax + 2 * PAD).min(SCREEN_W);
+    let ph = (PAD + title_h + body_h / 2 + body.len() * body_h + footer_h + PAD).min(SCREEN_H);
     let px = (SCREEN_W - pw) / 2;
     let py = (SCREEN_H.saturating_sub(ph)) / 2;
 
@@ -165,12 +174,12 @@ pub fn show(surf: &mut Surface, font: &script::FontStack<'_>, takeover: bool) ->
 
     let mut y = py + PAD;
     blit_centered(surf, font, TITLE, TITLE_PX, px, pw, y);
-    y += title_h + line_h / 2;
+    y += title_h + body_h / 2;
     for l in body {
         if !l.is_empty() {
             blit_centered(surf, font, l, BODY_PX, px, pw, y);
         }
-        y += line_h;
+        y += body_h;
     }
     blit_centered(surf, font, FOOTER, FOOTER_PX, px, pw, y);
 
@@ -178,6 +187,11 @@ pub fn show(surf: &mut Surface, font: &script::FontStack<'_>, takeover: bool) ->
     region.add(px as i32, py as i32, 2);
     region.add((px + pw) as i32, (py + ph) as i32, 2);
     Help { region, x: px, y: py, w: pw, h: ph, saved }
+}
+
+fn line_size(font: &script::FontStack<'_>, text: &str, px_size: f32) -> (usize, usize) {
+    let line = script::rasterize_line(font, text, px_size);
+    (line.width, line.height)
 }
 
 impl Help {
@@ -342,7 +356,9 @@ mod tests {
 
         // Dismissing must restore the page byte-for-byte.
         panel.dismiss(&mut surf);
-        assert_eq!(before, surf.copy_rect(0, 0, w, h), "restore is not exact");
+        let after = surf.copy_rect(0, 0, w, h);
+        let diff = before.iter().zip(&after).filter(|(a, b)| a != b).count();
+        assert_eq!(diff, 0, "restore changed {diff} bytes");
     }
 
     #[test]

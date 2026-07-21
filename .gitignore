@@ -15,6 +15,8 @@ build/
 
 # Device/SDK artifacts
 work/
+device/quill/
+device/rm-sdk-*/
 *.img
 *.bin
 *.elf
@@ -22,4 +24,3 @@ work/
 # Font binaries are kept local until redistribution rights are confirmed.
 device/riddle/fonts/*.ttf
 !device/riddle/fonts/README.md
-

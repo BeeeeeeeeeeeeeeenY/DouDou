@@ -1,7 +1,8 @@
 fn main() {
     if std::env::var("CARGO_FEATURE_TAKEOVER").is_ok() {
         // libquill.so + libqsgepaper.so from the quill project.
-        let quill = concat!(env!("CARGO_MANIFEST_DIR"), "/../quill");
+        let quill = std::env::var("RIDDLE_QUILL_DIR")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../quill").to_string());
         println!("cargo:rustc-link-search=native={quill}/build");
         println!("cargo:rustc-link-search=native={quill}/vendor");
         println!("cargo:rustc-link-lib=dylib=quill");

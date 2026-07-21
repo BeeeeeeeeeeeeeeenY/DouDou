@@ -38,15 +38,6 @@ impl<'a> FontStack<'a> {
             .unwrap_or(primary)
             .max(primary)
     }
-
-    fn height(&self, px: f32) -> f32 {
-        let primary = self.primary.as_scaled(PxScale::from(px)).height();
-        self.fallback
-            .as_ref()
-            .map(|font| font.as_scaled(PxScale::from(px)).height())
-            .unwrap_or(primary)
-            .max(primary)
-    }
 }
 
 pub struct Line {
@@ -58,6 +49,8 @@ pub struct Line {
 
 /// Rasterize one line of text at `px` height into a boolean mask.
 pub fn rasterize_line(font: &FontStack<'_>, text: &str, px: f32) -> Line {
+    const PAD: f32 = 6.0;
+
     let mut glyphs: Vec<(bool, Glyph)> = Vec::new();
     let mut caret = 0.0f32;
     let mut prev: Option<(bool, ab_glyph::GlyphId)> = None;
@@ -76,8 +69,35 @@ pub fn rasterize_line(font: &FontStack<'_>, text: &str, px: f32) -> Line {
         glyphs.push((uses_fallback, g));
         prev = Some((uses_fallback, id));
     }
-    let width = (caret.ceil() as usize + 4).max(1);
-    let height = (font.height(px).ceil() as usize + 4).max(1);
+
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (uses_fallback, g) in &glyphs {
+        let face = if *uses_fallback {
+            font.fallback.as_ref().expect("selected fallback must exist")
+        } else {
+            &font.primary
+        };
+        if let Some(outline) = face.outline_glyph(g.clone()) {
+            let bounds = outline.px_bounds();
+            min_x = min_x.min(bounds.min.x.floor());
+            min_y = min_y.min(bounds.min.y.floor());
+            max_x = max_x.max(bounds.max.x.ceil());
+            max_y = max_y.max(bounds.max.y.ceil());
+        }
+    }
+
+    if !min_x.is_finite() || !min_y.is_finite() {
+        let width = (caret.ceil() as usize + (PAD as usize) * 2).max(1);
+        return Line { width, height: 1, mask: vec![false; width] };
+    }
+
+    let shift_x = PAD - min_x;
+    let shift_y = PAD - min_y;
+    let width = ((max_x - min_x + PAD * 2.0).ceil() as usize).max(1);
+    let height = ((max_y - min_y + PAD * 2.0).ceil() as usize).max(1);
     let mut mask = vec![false; width * height];
     for (uses_fallback, g) in glyphs {
         let face = if uses_fallback {
@@ -85,6 +105,9 @@ pub fn rasterize_line(font: &FontStack<'_>, text: &str, px: f32) -> Line {
         } else {
             &font.primary
         };
+        let mut g = g;
+        g.position.x += shift_x;
+        g.position.y += shift_y;
         if let Some(outline) = face.outline_glyph(g) {
             let bounds = outline.px_bounds();
             outline.draw(|x, y, cov| {
@@ -408,5 +431,28 @@ mod tests {
         assert!(raster.mask.iter().any(|&pixel| pixel));
         thin(&mut raster);
         assert!(!trace(&raster).is_empty());
+    }
+
+    #[test]
+    fn rasterization_keeps_ink_away_from_edges() {
+        let font = FontStack::new(
+            FontRef::try_from_slice(include_bytes!("../fonts/PingFangShiGuang.ttf")).unwrap(),
+            None,
+        );
+        let raster = rasterize_line(&font, "中g？你好。", 52.0);
+        let border = 2usize;
+        let mut edge_ink = 0usize;
+        for y in 0..raster.height {
+            for x in 0..raster.width {
+                if x < border
+                    || y < border
+                    || x + border >= raster.width
+                    || y + border >= raster.height
+                {
+                    edge_ink += raster.mask[y * raster.width + x] as usize;
+                }
+            }
+        }
+        assert_eq!(edge_ink, 0, "glyph ink reached the raster edge");
     }
 }

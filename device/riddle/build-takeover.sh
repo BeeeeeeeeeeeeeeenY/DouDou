@@ -9,14 +9,16 @@ cd "$(dirname "$0")"
 
 SDK=${RIDDLE_RM_SDK:-../rm-sdk-3.27}
 export RIDDLE_RM_SDK="$SDK"
+QUILL=${RIDDLE_QUILL_DIR:-../quill}
+export RIDDLE_QUILL_DIR="$QUILL"
 ENV=$(ls "$SDK"/environment-setup-* | head -n1)
 unset LD_LIBRARY_PATH          # SDK env refuses to source otherwise
 source "$ENV"                  # sets CC=aarch64-remarkable-linux-gcc ... --sysroot=...
 
 # Ensure quill's build artifacts exist (libquill.so + vendor/libqsgepaper.so).
-if [ ! -f ../quill/build/libquill.so ]; then
+if [ ! -f "$QUILL/build/libquill.so" ]; then
     echo "building quill first..."
-    ( cd ../quill && ./build.sh )
+    ( cd "$QUILL" && ./build.sh )
 fi
 
 # Point cargo's aarch64 linker at the SDK gcc. $CC includes the -mcpu/-sysroot

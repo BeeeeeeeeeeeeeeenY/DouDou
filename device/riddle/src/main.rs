@@ -38,7 +38,7 @@ const IDLE_COMMIT: Duration = Duration::from_millis(2800);
 /// How long the diary waits on a silent oracle before giving up on the turn.
 /// Generous: thinking models can lead with a long silence.
 const ORACLE_PATIENCE: Duration = Duration::from_secs(120);
-const REPLY_PX: f32 = 88.0;
+const REPLY_PX: f32 = 52.0;
 const MARGIN_X: i32 = 120;
 
 const USAGE: &str = "\
@@ -864,8 +864,18 @@ fn plan_reply(font: &script::FontStack<'_>, text: &str, y_start: Option<i32>) ->
     let reply_px = REPLY_PX;
     let max_w = (SCREEN_W as i32 - 2 * MARGIN_X) as f32;
     let lines = script::wrap(font, text, reply_px, max_w);
-    let line_h = (reply_px * 1.3) as i32;
-    let total_h = line_h * lines.len() as i32;
+
+    let mut prepared = Vec::new();
+    let mut line_h = (reply_px * 1.45) as i32;
+    for line_text in &lines {
+        let mut raster = script::rasterize_line(font, line_text, reply_px);
+        script::thin(&mut raster);
+        let line_strokes = script::trace(&raster);
+        line_h = line_h.max(raster.height as i32 + 10);
+        prepared.push((raster.width, line_strokes));
+    }
+
+    let total_h = line_h * prepared.len() as i32;
     let mut y = y_start.unwrap_or(((SCREEN_H as i32 - total_h) / 3).max(60));
     let mut strokes = Vec::new();
     let mut region = BBox::empty();
@@ -875,11 +885,8 @@ fn plan_reply(font: &script::FontStack<'_>, text: &str, y_start: Option<i32>) ->
         ((seed >> 16) % 7) as i32 - 3
     };
 
-    for line_text in &lines {
-        let mut raster = script::rasterize_line(font, line_text, reply_px);
-        script::thin(&mut raster);
-        let line_strokes = script::trace(&raster);
-        let x0 = (SCREEN_W as i32 - raster.width as i32) / 2;
+    for (line_width, line_strokes) in prepared {
+        let x0 = (SCREEN_W as i32 - line_width as i32) / 2;
         let wobble = jitter();
         for s in line_strokes {
             let mapped: Vec<(i32, i32)> = s
