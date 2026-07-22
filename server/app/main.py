@@ -13,8 +13,9 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     def health():
         return {"ok": True}
 
-    from app.routers import admin_providers
+    from app.routers import admin_profiles, admin_providers
 
     app.include_router(admin_providers.router)
+    app.include_router(admin_profiles.router)
 
     return app
