@@ -8,7 +8,9 @@
 //!
 //!   index.tsv        one line per memory: id \t transcript \t reply
 //!                    (tabs/newlines/backslashes escaped)
-//!   <id>.strokes     the pen strokes: one line per stroke, "x,y,r;x,y,r;…"
+//!   <id>.strokes     the pen strokes: one line per stroke, "x,y,r,t;x,y,r,t;…"
+//!                    (t = ms since the page's first pen contact; legacy
+//!                    3-field "x,y,r" lines still load, with t defaulting to 0)
 //!
 //! Delete the directory and the diary forgets. `RIDDLE_MEMORY=off` disables
 //! remembering entirely (no storage, no context sent with requests).
@@ -22,7 +24,7 @@ const MAX_MEMORIES: usize = 400;
 /// Handwriting stays faithful; files shrink several-fold.
 const MIN_POINT_DIST2: i64 = 9;
 
-pub type Strokes = Vec<Vec<(i32, i32, i32)>>;
+pub type Strokes = Vec<Vec<(i32, i32, i32, u32)>>;
 
 #[derive(Clone)]
 pub struct Entry {
@@ -82,11 +84,11 @@ impl MemoryStore {
         let mut lines = String::new();
         for s in &thin {
             let mut first = true;
-            for &(x, y, r) in s {
+            for &(x, y, r, t) in s {
                 if !first {
                     lines.push(';');
                 }
-                lines.push_str(&format!("{x},{y},{r}"));
+                lines.push_str(&format!("{x},{y},{r},{t}"));
                 first = false;
             }
             lines.push('\n');
@@ -139,8 +141,9 @@ impl MemoryStore {
                 let (Some(x), Some(y), Some(r)) = (n.next(), n.next(), n.next()) else {
                     continue;
                 };
+                let t = n.next().and_then(|v| v.parse().ok()).unwrap_or(0u32);
                 if let (Ok(x), Ok(y), Ok(r)) = (x.parse(), y.parse(), r.parse()) {
-                    stroke.push((x, y, r));
+                    stroke.push((x, y, r, t));
                 }
             }
             if !stroke.is_empty() {
@@ -200,17 +203,17 @@ fn decimate(strokes: &Strokes) -> Strokes {
     strokes
         .iter()
         .map(|s| {
-            let mut out: Vec<(i32, i32, i32)> = Vec::new();
-            for (i, &(x, y, r)) in s.iter().enumerate() {
+            let mut out: Vec<(i32, i32, i32, u32)> = Vec::new();
+            for (i, &(x, y, r, t)) in s.iter().enumerate() {
                 let keep = match out.last() {
                     None => true,
-                    Some(&(lx, ly, _)) => {
+                    Some(&(lx, ly, _, _)) => {
                         let (dx, dy) = ((x - lx) as i64, (y - ly) as i64);
                         dx * dx + dy * dy >= MIN_POINT_DIST2 || i == s.len() - 1
                     }
                 };
                 if keep {
-                    out.push((x, y, r));
+                    out.push((x, y, r, t));
                 }
             }
             out
@@ -308,7 +311,7 @@ mod tests {
     #[test]
     fn round_trip_and_reload() {
         let mut s = tmp_store("rt");
-        let strokes: Strokes = vec![vec![(10, 20, 3), (14, 24, 3), (100, 120, 2)]];
+        let strokes: Strokes = vec![vec![(10, 20, 3, 0), (14, 24, 3, 0), (100, 120, 2, 0)]];
         s.append(1751856000, "hello\ttom\nnewline", "Hello. Who writes?", &strokes);
         let dir = s.dir.clone();
 
@@ -319,25 +322,25 @@ mod tests {
         assert_eq!(s2.entries[0].reply, "Hello. Who writes?");
         let back = s2.strokes(1751856000).unwrap();
         assert_eq!(back.len(), 1);
-        assert_eq!(back[0].first(), Some(&(10, 20, 3)));
-        assert_eq!(back[0].last(), Some(&(100, 120, 2)));
+        assert_eq!(back[0].first(), Some(&(10, 20, 3, 0)));
+        assert_eq!(back[0].last(), Some(&(100, 120, 2, 0)));
         let _ = std::fs::remove_dir_all(&s2.dir);
     }
 
     #[test]
     fn decimation_keeps_endpoints_drops_dense() {
-        let dense: Strokes = vec![(0..100).map(|i| (i, 0, 3)).collect()];
+        let dense: Strokes = vec![(0..100).map(|i| (i, 0, 3, 0)).collect()];
         let thin = decimate(&dense);
         assert!(thin[0].len() < 40, "kept too many: {}", thin[0].len());
-        assert_eq!(thin[0].first(), Some(&(0, 0, 3)));
-        assert_eq!(thin[0].last(), Some(&(99, 0, 3)));
+        assert_eq!(thin[0].first(), Some(&(0, 0, 3, 0)));
+        assert_eq!(thin[0].last(), Some(&(99, 0, 3, 0)));
     }
 
     #[test]
     fn prune_forgets_oldest() {
         let mut s = tmp_store("prune");
         for i in 0..(MAX_MEMORIES + 5) as u64 {
-            s.append(i + 1, "t", "r", &vec![vec![(1, 1, 1)]]);
+            s.append(i + 1, "t", "r", &vec![vec![(1, 1, 1, 0)]]);
         }
         assert_eq!(s.entries.len(), MAX_MEMORIES);
         assert_eq!(s.entries[0].id, 6);
@@ -349,13 +352,33 @@ mod tests {
     #[test]
     fn catalog_is_numbered_newest_first() {
         let mut s = tmp_store("catalog");
-        s.append(1751856000, "about the garden", "…", &vec![vec![(1, 1, 1)]]);
-        s.append(1751942400, "about the rain", "…", &vec![vec![(1, 1, 1)]]);
+        s.append(1751856000, "about the garden", "…", &vec![vec![(1, 1, 1, 0)]]);
+        s.append(1751942400, "about the rain", "…", &vec![vec![(1, 1, 1, 0)]]);
         let (lines, ids) = s.catalog(10);
         assert_eq!(ids, vec![1751942400, 1751856000]);
         assert!(lines[0].starts_with("1. "));
         assert!(lines[0].contains("about the rain"));
         assert!(lines[1].contains("about the garden"));
+        let _ = std::fs::remove_dir_all(&s.dir);
+    }
+
+    #[test]
+    fn strokes_v2_round_trip_keeps_time() {
+        let mut s = tmp_store("v2");
+        let strokes: Strokes = vec![vec![(10, 20, 3, 0), (14, 24, 3, 120)]];
+        s.append(42, "t", "r", &strokes);
+        let back = s.strokes(42).unwrap();
+        assert_eq!(back[0][0], (10, 20, 3, 0));
+        assert_eq!(back[0][1], (14, 24, 3, 120));
+        let _ = std::fs::remove_dir_all(&s.dir);
+    }
+
+    #[test]
+    fn legacy_three_field_strokes_still_load() {
+        let s = tmp_store("legacy");
+        std::fs::write(s.strokes_path(7), "10,20,3;14,24,3\n").unwrap();
+        let back = s.strokes(7).unwrap();
+        assert_eq!(back[0], vec![(10, 20, 3, 0), (14, 24, 3, 0)]);
         let _ = std::fs::remove_dir_all(&s.dir);
     }
 

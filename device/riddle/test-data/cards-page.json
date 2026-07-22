@@ -1,0 +1,14 @@
+{
+  "ink": [],
+  "response": {
+    "v": 1, "turn_id": "demo-2", "spoken_text": "来描一描「山」字！",
+    "paper_cards": [
+      { "type": "page", "layout": [
+        { "card": { "type": "trace", "kind": "hanzi", "content": "山", "guide": "tian_grid" }, "rect_norm": [0.15, 0.08, 0.7, 0.35] },
+        { "card": { "type": "trace", "kind": "shape", "content": "circle", "guide": "none" }, "rect_norm": [0.15, 0.5, 0.3, 0.22] },
+        { "card": { "type": "stamp", "name": "smiley", "count": 1 }, "rect_norm": [0.6, 0.5, 0.25, 0.22] }
+      ] }
+    ],
+    "page_action": "new_page", "memory_tags": ["tracing"]
+  }
+}

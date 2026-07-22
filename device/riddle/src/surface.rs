@@ -191,7 +191,11 @@ impl Surface {
     pub fn brush_line(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, r: i32, c: u16) {
         let dx = (x1 - x0).abs();
         let dy = (y1 - y0).abs();
-        let steps = dx.max(dy).max(1);
+        // Belt-and-braces cap: every legitimate caller's coordinates are
+        // on-screen (well under this), so this never fires in practice —
+        // it only guards against a step count exploding into a CPU freeze
+        // if a caller is ever handed a huge/malformed coordinate.
+        let steps = dx.max(dy).max(1).min(4096);
         for i in 0..=steps {
             let x = x0 + (x1 - x0) * i / steps;
             let y = y0 + (y1 - y0) * i / steps;

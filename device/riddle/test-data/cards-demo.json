@@ -1,0 +1,16 @@
+{
+  "ink": [[[520, 620], [780, 600], [900, 760], [700, 900], [520, 620]]],
+  "response": {
+    "v": 1,
+    "turn_id": "demo-1",
+    "spoken_text": "哇，你画了一座小山！我们一起数三颗星星。",
+    "paper_cards": [
+      { "type": "stamp", "name": "star", "count": 3, "place": "near_new_ink", "size": "S" },
+      { "type": "text", "content": "山", "place": "near_anchor", "anchor_norm": [0.45, 0.36], "size": "L" },
+      { "type": "sketch", "place": "blank_area", "size": "M", "pace": "slow",
+        "strokes": [[[0.1, 0.9], [0.3, 0.4], [0.5, 0.9]], [[0.4, 0.65], [0.6, 0.65]], [[0.5, 0.9], [0.7, 0.3], [0.9, 0.9]]] }
+    ],
+    "page_action": "none",
+    "memory_tags": ["mountain", "stars"]
+  }
+}

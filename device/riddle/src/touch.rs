@@ -4,6 +4,7 @@
 
 use std::io;
 use std::os::fd::RawFd;
+use std::time::{Duration, Instant};
 
 const EV_SYN: u16 = 0;
 const SYN_REPORT: u16 = 0;
@@ -28,6 +29,52 @@ pub enum Gesture {
     Page(i32),
 }
 
+/// Child-safety: five-finger exit must be HELD, not tapped — a toddler's palm
+/// slap reaches five contacts for an instant all the time. Hold duration from
+/// RIDDLE_QUIT_HOLD_SECS (default 3; 0 restores the legacy instant tap).
+struct QuitArm {
+    hold: Duration,
+    since: Option<Instant>,
+    fired: bool,
+}
+
+impl QuitArm {
+    fn new(hold: Duration) -> Self {
+        Self { hold, since: None, fired: false }
+    }
+
+    fn from_env() -> Self {
+        let secs = std::env::var("RIDDLE_QUIT_HOLD_SECS")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|s| *s >= 0.0)
+            .unwrap_or(3.0);
+        Self::new(Duration::from_millis((secs * 1000.0) as u64))
+    }
+
+    fn update(&mut self, finger_count: usize, now: Instant) -> bool {
+        if finger_count < 5 {
+            self.since = None;
+            self.fired = false;
+            return false;
+        }
+        let since = *self.since.get_or_insert(now);
+        if !self.fired && now.duration_since(since) >= self.hold {
+            self.fired = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// Check if five-finger hold should fire quit. Counts active slots and updates arm.
+/// Extracted for testability — called both from finish_frame (on touch events) and
+/// drain's post-read tick (every ~2ms poll) so stationary holds advance the timer.
+fn tick_quit(slots: &[Slot; MAX_SLOTS], arm: &mut QuitArm, now: Instant) -> bool {
+    let count = slots.iter().filter(|s| s.active).count();
+    arm.update(count, now)
+}
+
 #[derive(Clone, Copy, Default)]
 struct Slot {
     active: bool,
@@ -42,7 +89,7 @@ pub struct TouchDevice {
     max_fingers: usize,
     frame_y: Option<i32>,
     total_motion: i32,
-    quit_sent: bool,
+    quit_arm: QuitArm,
 }
 
 impl TouchDevice {
@@ -65,7 +112,7 @@ impl TouchDevice {
                         max_fingers: 0,
                         frame_y: None,
                         total_motion: 0,
-                        quit_sent: false,
+                        quit_arm: QuitArm::from_env(),
                     });
                 }
             }
@@ -81,7 +128,8 @@ impl TouchDevice {
         self.max_fingers = 0;
         self.frame_y = None;
         self.total_motion = 0;
-        self.quit_sent = false;
+        self.quit_arm.since = None;
+        self.quit_arm.fired = false;
     }
 
     /// Compatibility helper for takeover apps that only use five-finger exit.
@@ -124,6 +172,11 @@ impl TouchDevice {
                 }
             }
         }
+        // Tick the quit timer even without new touch events. The main loop's
+        // ~2ms drain_check_quit() poll advances the hold timer for stationary presses.
+        if tick_quit(&self.slots, &mut self.quit_arm, Instant::now()) {
+            out.push(Gesture::Quit);
+        }
         out
     }
 
@@ -131,8 +184,7 @@ impl TouchDevice {
         let active: Vec<Slot> = self.slots.iter().copied().filter(|s| s.active).collect();
         let count = active.len();
         self.max_fingers = self.max_fingers.max(count);
-        if count >= 5 && !self.quit_sent {
-            self.quit_sent = true;
+        if tick_quit(&self.slots, &mut self.quit_arm, Instant::now()) {
             out.push(Gesture::Quit);
         }
 
@@ -172,7 +224,6 @@ impl TouchDevice {
             self.max_fingers = 0;
             self.frame_y = None;
             self.total_motion = 0;
-            self.quit_sent = false;
         }
     }
 }
@@ -183,5 +234,53 @@ impl Drop for TouchDevice {
             libc::ioctl(self.fd, EVIOCGRAB, 0i32);
             libc::close(self.fd);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quit_requires_sustained_five_fingers() {
+        let mut arm = QuitArm::new(Duration::from_secs(3));
+        let t0 = Instant::now();
+        assert!(!arm.update(5, t0)); // 刚满 5 指：不触发
+        assert!(!arm.update(5, t0 + Duration::from_millis(2900))); // 未满 3s
+        assert!(arm.update(5, t0 + Duration::from_millis(3001))); // 满 3s：触发
+        assert!(!arm.update(5, t0 + Duration::from_millis(3200))); // 已触发过，不重复
+    }
+
+    #[test]
+    fn quit_rearms_only_after_release() {
+        let mut arm = QuitArm::new(Duration::from_secs(3));
+        let t0 = Instant::now();
+        arm.update(5, t0);
+        assert!(!arm.update(3, t0 + Duration::from_millis(1000))); // 掉到 3 指：计时清零
+        assert!(!arm.update(5, t0 + Duration::from_millis(1500))); // 重新满 5 指从头计
+        assert!(!arm.update(5, t0 + Duration::from_millis(4400))); // 距重满仅 2.9s
+        assert!(arm.update(5, t0 + Duration::from_millis(4600))); // 3.1s：触发
+    }
+
+    #[test]
+    fn zero_hold_fires_immediately_for_legacy_mode() {
+        let mut arm = QuitArm::new(Duration::ZERO);
+        assert!(arm.update(5, Instant::now()));
+    }
+
+    #[test]
+    fn stationary_hold_fires_via_tick_without_new_frames() {
+        let mut slots = [Slot::default(); MAX_SLOTS];
+        for s in slots.iter_mut().take(5) {
+            s.active = true;
+        }
+        let mut arm = QuitArm::new(Duration::from_secs(3));
+        let t0 = Instant::now();
+        assert!(!tick_quit(&slots, &mut arm, t0));
+        assert!(tick_quit(&slots, &mut arm, t0 + Duration::from_millis(3100)));
+        assert!(
+            !tick_quit(&slots, &mut arm, t0 + Duration::from_millis(3200)),
+            "fired latch holds"
+        );
     }
 }

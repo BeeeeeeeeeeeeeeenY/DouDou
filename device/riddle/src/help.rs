@@ -8,7 +8,7 @@ use crate::surface::{Surface, BLACK, WHITE};
 
 /// Does the committed ink look like a single big "?" (with or without its
 /// dot)? Deliberately forgiving: a false positive only shows the guide.
-pub fn looks_like_question_mark(strokes: &[Vec<(i32, i32, i32)>]) -> bool {
+pub fn looks_like_question_mark(strokes: &[Vec<(i32, i32, i32, u32)>]) -> bool {
     if strokes.is_empty() || strokes.len() > 3 {
         return false;
     }
@@ -18,7 +18,7 @@ pub fn looks_like_question_mark(strokes: &[Vec<(i32, i32, i32)>]) -> bool {
         return false;
     }
     let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-    for &(x, y, _) in main {
+    for &(x, y, _, _) in main {
         x0 = x0.min(x);
         y0 = y0.min(y);
         x1 = x1.max(x);
@@ -35,7 +35,7 @@ pub fn looks_like_question_mark(strokes: &[Vec<(i32, i32, i32)>]) -> bool {
             continue;
         }
         let (mut dx0, mut dy0, mut dx1, mut dy1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-        for &(x, y, _) in s {
+        for &(x, y, _, _) in s {
             dx0 = dx0.min(x);
             dy0 = dy0.min(y);
             dx1 = dx1.max(x);
@@ -52,7 +52,7 @@ pub fn looks_like_question_mark(strokes: &[Vec<(i32, i32, i32)>]) -> bool {
         }
     }
     // Normalize to top-down drawing order.
-    let mut pts: Vec<(i32, i32)> = main.iter().map(|&(x, y, _)| (x, y)).collect();
+    let mut pts: Vec<(i32, i32)> = main.iter().map(|&(x, y, _, _)| (x, y)).collect();
     if pts[0].1 > pts[pts.len() - 1].1 {
         pts.reverse();
     }
@@ -251,13 +251,13 @@ mod tests {
     use super::*;
     use ab_glyph::FontRef;
 
-    fn stroke(pts: &[(i32, i32)]) -> Vec<(i32, i32, i32)> {
-        pts.iter().map(|&(x, y)| (x, y, 3)).collect()
+    fn stroke(pts: &[(i32, i32)]) -> Vec<(i32, i32, i32, u32)> {
+        pts.iter().map(|&(x, y)| (x, y, 3, 0)).collect()
     }
 
     /// Parametric "?": hook (arc sweeping over the top and curling back) then
     /// a straight descender; optional dot.
-    fn question_mark(scale: f32, with_dot: bool, reversed: bool) -> Vec<Vec<(i32, i32, i32)>> {
+    fn question_mark(scale: f32, with_dot: bool, reversed: bool) -> Vec<Vec<(i32, i32, i32, u32)>> {
         let mut pts = Vec::new();
         let (cx, cy, r) = (200.0 * scale, 180.0 * scale, 120.0 * scale);
         let mut deg = 180.0f32;

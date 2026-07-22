@@ -5,16 +5,24 @@ use crate::fb::BBox;
 use crate::surface::{Surface, BLACK, WHITE};
 
 pub struct Ink {
-    /// Finished strokes as point lists (x, y, radius).
-    strokes: Vec<Vec<(i32, i32, i32)>>,
-    current: Vec<(i32, i32, i32)>,
+    /// Finished strokes as point lists (x, y, radius, ms-since-page-start).
+    strokes: Vec<Vec<(i32, i32, i32, u32)>>,
+    current: Vec<(i32, i32, i32, u32)>,
     last_erase: Option<(i32, i32)>,
+    /// First pen contact on this page; every point's t is measured from it.
+    epoch: Option<std::time::Instant>,
     pub bbox: BBox,
 }
 
 impl Ink {
     pub fn new() -> Self {
-        Self { strokes: Vec::new(), current: Vec::new(), last_erase: None, bbox: BBox::empty() }
+        Self {
+            strokes: Vec::new(),
+            current: Vec::new(),
+            last_erase: None,
+            epoch: None,
+            bbox: BBox::empty(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -22,7 +30,7 @@ impl Ink {
     }
 
     /// Finished strokes (the current in-flight stroke is not included).
-    pub fn stroke_list(&self) -> &[Vec<(i32, i32, i32)>] {
+    pub fn stroke_list(&self) -> &[Vec<(i32, i32, i32, u32)>] {
         &self.strokes
     }
 
@@ -30,6 +38,7 @@ impl Ink {
         self.strokes.clear();
         self.current.clear();
         self.last_erase = None;
+        self.epoch = None;
         self.bbox = BBox::empty();
     }
 
@@ -37,14 +46,18 @@ impl Ink {
     /// resolved by the caller. Returns the dirty rect of what was drawn.
     pub fn pen_point(&mut self, surf: &mut Surface, x: i32, y: i32, r: i32) -> BBox {
         let mut dirty = BBox::empty();
-        if let Some(&(px, py, pr)) = self.current.last() {
+        if let Some(&(px, py, pr, _)) = self.current.last() {
             surf.brush_line(px, py, x, y, r.min(pr + 1), BLACK);
             dirty.add(px, py, pr + 2);
         } else {
             surf.stamp(x, y, r, BLACK);
         }
         dirty.add(x, y, r + 2);
-        self.current.push((x, y, r));
+        let t = {
+            let e = *self.epoch.get_or_insert_with(std::time::Instant::now);
+            e.elapsed().as_millis() as u32
+        };
+        self.current.push((x, y, r, t));
         self.bbox.add(x, y, r + 2);
         dirty
     }
@@ -71,9 +84,9 @@ impl Ink {
     /// are erased through the middle, and recompute the ink bbox.
     fn forget_near(&mut self, x: i32, y: i32, r: i32) {
         let r2 = (r + 2) * (r + 2);
-        let mut kept: Vec<Vec<(i32, i32, i32)>> = Vec::new();
+        let mut kept: Vec<Vec<(i32, i32, i32, u32)>> = Vec::new();
         for stroke in self.strokes.drain(..) {
-            let mut seg: Vec<(i32, i32, i32)> = Vec::new();
+            let mut seg: Vec<(i32, i32, i32, u32)> = Vec::new();
             for p in stroke {
                 let (dx, dy) = (p.0 - x, p.1 - y);
                 if dx * dx + dy * dy <= r2 {
@@ -91,7 +104,7 @@ impl Ink {
         self.strokes = kept;
         self.bbox = BBox::empty();
         for stroke in &self.strokes {
-            for &(px, py, pr) in stroke {
+            for &(px, py, pr, _) in stroke {
                 self.bbox.add(px, py, pr + 2);
             }
         }
@@ -158,6 +171,8 @@ fn px_hash(x: i32, y: i32) -> u32 {
 
 /// One pass of the "diary drinks the ink" effect: erase the pixels whose hash
 /// falls in this stage. After `stages` passes the region is clean white.
+// Kept: the memory-conjure fade may return in a later polish pass.
+#[allow(dead_code)]
 pub fn dissolve_pass(surf: &mut Surface, region: BBox, stage: u32, stages: u32) {
     if region.is_empty() {
         return;
@@ -202,7 +217,7 @@ mod tests {
         assert_eq!(ink.stroke_list().len(), 2, "middle-erase should split the stroke");
         // No surviving point lies under the eraser.
         for st in ink.stroke_list() {
-            for &(x, y, _) in st {
+            for &(x, y, _, _) in st {
                 assert!((x - 110).pow(2) + (y - 100).pow(2) > 22 * 22);
             }
         }
@@ -219,5 +234,23 @@ mod tests {
         ink.erase_point(&mut s, 102, 100, 30);
         assert!(ink.stroke_list().is_empty());
         assert!(ink.bbox.is_empty());
+    }
+
+    #[test]
+    fn points_carry_monotonic_timestamps() {
+        let (_buf, mut s) = surf();
+        let mut ink = Ink::new();
+        ink.pen_point(&mut s, 10, 10, 3);
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        ink.pen_point(&mut s, 20, 10, 3);
+        ink.pen_up();
+        let strokes = ink.stroke_list();
+        assert_eq!(strokes[0][0].3, 0, "first point of the page is t=0");
+        assert!(strokes[0][1].3 >= 10, "second point ~15ms later, got {}", strokes[0][1].3);
+        // 清页后重新计时。
+        ink.clear();
+        ink.pen_point(&mut s, 30, 30, 3);
+        ink.pen_up();
+        assert_eq!(ink.stroke_list()[0][0].3, 0);
     }
 }
