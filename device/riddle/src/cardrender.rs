@@ -245,6 +245,7 @@ fn plan_text(
     anchor: layout::Anchor,
 ) -> Vec<RenderPlan> {
     let mut out = Vec::new();
+    let mut any_lines = false;
     for size in size_ladder(common.size) {
         let px = text_px(size);
         let max_w = (2.0 * size_box(size) as f32).min(1380.0);
@@ -252,6 +253,7 @@ fn plan_text(
         if prepared.is_empty() {
             continue;
         }
+        any_lines = true;
         if let Some((x0, y0)) = layout::resolve(map, &common.place, anchor, w, h) {
             let strokes = place_text(prepared, line_h, x0, y0);
             commit(make_plan(strokes, surface::BLACK, ppf(common.pace)), map, &mut out);
@@ -260,19 +262,58 @@ fn plan_text(
             }
         }
     }
-    eprintln!("riddle: card dropped (no room)");
+    // Distinguish "there was nothing to draw" from "there was nowhere to
+    // draw it" — the latter message would be misleading for empty content.
+    if any_lines {
+        eprintln!("riddle: card dropped (no room)");
+    } else {
+        eprintln!("riddle: empty text card dropped");
+    }
     out
 }
 
+/// Place text into an explicit Page-child rect. Unlike the top-level path
+/// there is no placement search (the rect is server-given), but the text
+/// still must not spill past the rect's own height: try the card's own
+/// size first, then the same L->M->S ladder `plan_text` uses, until some
+/// size's wrapped block fits `h`. If nothing in the ladder fits vertically
+/// even at the smallest size, keep that size's lines but drop whatever
+/// doesn't fit within `h` — never emit a stroke point below `y0 + h`.
 fn text_plan_in_rect(
     common: &cards::CardCommon,
     content: &str,
     font: &script::FontStack<'_>,
     rect: (i32, i32, i32, i32),
 ) -> Option<RenderPlan> {
-    let (x0, y0, w, _h) = rect;
-    let px = text_px(common.size);
-    let (_w, _h2, line_h, prepared) = prepare_text(font, content, px, w as f32);
+    let (x0, y0, w, h) = rect;
+    let mut any_lines = false;
+    let mut smallest: Option<(i32, Vec<Vec<Vec<(i32, i32)>>>)> = None;
+    for size in size_ladder(common.size) {
+        let px = text_px(size);
+        let (_w, block_h, line_h, prepared) = prepare_text(font, content, px, w as f32);
+        if prepared.is_empty() {
+            continue;
+        }
+        any_lines = true;
+        if block_h <= h {
+            let strokes = place_text(prepared, line_h, x0, y0);
+            return make_plan(strokes, surface::BLACK, ppf(common.pace));
+        }
+        smallest = Some((line_h, prepared));
+    }
+    if !any_lines {
+        eprintln!("riddle: empty text card dropped");
+        return None;
+    }
+    // Nothing in the ladder fit the rect's height: clip the smallest
+    // size's lines to however many whole lines fit, rather than letting
+    // ink spill past y0 + h.
+    let (line_h, mut prepared) = smallest?;
+    let max_lines = (h / line_h).max(0) as usize;
+    if max_lines < prepared.len() {
+        eprintln!("riddle: page text clipped to rect");
+        prepared.truncate(max_lines);
+    }
     if prepared.is_empty() {
         return None;
     }
@@ -546,20 +587,32 @@ const TALLY_GROUP_W: i32 = TALLY_STROKE_GAP * 3;
 const TALLY_GROUP_PITCH: i32 = TALLY_GROUP_W + 36;
 const TALLY_GROUPS_PER_ROW: u32 = 4;
 const TALLY_ROW_PITCH: i32 = TALLY_H + 30;
+/// A full group's diagonal slash overshoots the group's nominal
+/// `0..TALLY_GROUP_W` span by this many px on each side (see
+/// `tally_groups`) — folded into `tally_block_dims` so the resolved block
+/// actually contains the diagonal's ink, not just the four verticals.
+const TALLY_OVERSHOOT: i32 = 6;
 
 fn tally_block_dims(n: u32) -> (i32, i32) {
     let groups = n.max(1).div_ceil(5);
     let cols = groups.min(TALLY_GROUPS_PER_ROW);
     let rows = groups.div_ceil(TALLY_GROUPS_PER_ROW);
-    (cols as i32 * TALLY_GROUP_PITCH - 36, rows as i32 * TALLY_ROW_PITCH - 30)
+    (
+        cols as i32 * TALLY_GROUP_PITCH - 36 + 2 * TALLY_OVERSHOOT,
+        rows as i32 * TALLY_ROW_PITCH - 30,
+    )
 }
 
 /// One output entry per group of up to 5: up to 4 verticals, plus a
-/// diagonal slash across them once a group actually reaches 5.
+/// diagonal slash across them once a group actually reaches 5. Groups are
+/// inset by `TALLY_OVERSHOOT` from `bx` so the first group's diagonal
+/// (which reaches `TALLY_OVERSHOOT` px left of its own verticals) lands
+/// exactly at `bx`, matching the padding `tally_block_dims` added.
 fn tally_groups(n: u32, bx: i32, by: i32) -> Vec<Vec<Vec<(i32, i32)>>> {
     let n = n.max(1);
     let groups = n.div_ceil(5);
     let mut remaining = n;
+    let bx = bx + TALLY_OVERSHOOT;
     (0..groups)
         .map(|g| {
             let col = g % TALLY_GROUPS_PER_ROW;
@@ -575,7 +628,10 @@ fn tally_groups(n: u32, bx: i32, by: i32) -> Vec<Vec<Vec<(i32, i32)>>> {
                 strokes.push(vec![(x, gy), (x, gy + TALLY_H)]);
             }
             if in_group == 5 {
-                strokes.push(vec![(gx - 6, gy + TALLY_H - 10), (gx + TALLY_GROUP_W + 6, gy + 10)]);
+                strokes.push(vec![
+                    (gx - TALLY_OVERSHOOT, gy + TALLY_H - 10),
+                    (gx + TALLY_GROUP_W + TALLY_OVERSHOOT, gy + 10),
+                ]);
             }
             strokes
         })
@@ -677,9 +733,27 @@ fn grid_strokes(x0: i32, y0: i32, box_px: i32) -> Vec<Vec<(i32, i32)>> {
     ]
 }
 
+/// The interaction spec defines a hanzi trace card's content as a single
+/// character (单字); take only the first and drop the rest rather than
+/// rasterizing a multi-character line that would overrun the box width.
+/// Belt-and-braces: even a single CJK glyph could in principle rasterize
+/// wider than tall (an unusual glyph, or a non-square box_px), so also
+/// re-rasterize at a rescaled height if the first attempt is too wide.
 fn hanzi_template_strokes(font: &script::FontStack<'_>, content: &str, x0: i32, y0: i32, box_px: i32) -> Vec<Vec<(i32, i32)>> {
-    let px = box_px as f32 * 0.8;
-    let mut raster = script::rasterize_line(font, content, px);
+    let mut chars = content.chars();
+    let Some(first) = chars.next() else {
+        return Vec::new();
+    };
+    if chars.next().is_some() {
+        eprintln!("riddle: trace hanzi truncated to first char");
+    }
+    let single = first.to_string();
+    let mut px = box_px as f32 * 0.8;
+    let mut raster = script::rasterize_line(font, &single, px);
+    if box_px > 0 && raster.width as i32 > box_px {
+        px *= box_px as f32 / raster.width as f32;
+        raster = script::rasterize_line(font, &single, px);
+    }
     script::thin(&mut raster);
     let local = script::trace(&raster);
     let gx0 = x0 + (box_px - raster.width as i32) / 2;
@@ -974,5 +1048,58 @@ mod tests {
         let card = Card::Count { common: common(Place::BlankArea, Size::S), n: 3, style: CountStyle::Dots };
         let plans = plan_card(&card, &mut map, &font(), (0, 0));
         assert!(plans.len() >= 3, "at least one plan per dot, got {}", plans.len());
+    }
+
+    #[test]
+    fn trace_hanzi_multichar_content_stays_in_its_box() {
+        let mut map = InkMap::new(1620, 2160);
+        let card = Card::Trace {
+            common: common(Place::BlankArea, Size::S),
+            kind: TraceKind::Hanzi, content: "山水火".into(), guide: TraceGuide::None,
+        };
+        let plans = plan_card(&card, &mut map, &font(), (0, 0));
+        assert!(!plans.is_empty());
+        let mut min_x = i32::MAX;
+        let mut min_y = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut max_y = i32::MIN;
+        for p in &plans {
+            for s in &p.strokes {
+                for &(x, y) in s {
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                }
+            }
+        }
+        assert!(max_x - min_x <= 243, "width {} exceeds the S box", max_x - min_x);
+        assert!(max_y - min_y <= 243, "height {} exceeds the S box", max_y - min_y);
+    }
+
+    #[test]
+    fn page_text_respects_rect_height() {
+        let mut map = InkMap::new(1620, 2160);
+        let card = Card::Page {
+            layout: vec![(
+                Card::Text { common: common(Place::BlankArea, Size::L), content: "一二三四五六".into() },
+                (0.1, 0.1, 0.15, 0.06), // w=243, h=130 — narrow enough that 84px wraps past it
+            )],
+        };
+        let plans = plan_card(&card, &mut map, &font(), (0, 0));
+        assert!(!plans.is_empty());
+        let rect_y = (0.1_f32 * 2160.0).round() as i32;
+        let rect_h = (0.06_f32 * 2160.0).round() as i32;
+        for p in &plans {
+            for s in &p.strokes {
+                for &(_, y) in s {
+                    assert!(
+                        y >= rect_y && y <= rect_y + rect_h,
+                        "y={y} escapes the rect's [{rect_y}, {}]",
+                        rect_y + rect_h
+                    );
+                }
+            }
+        }
     }
 }
