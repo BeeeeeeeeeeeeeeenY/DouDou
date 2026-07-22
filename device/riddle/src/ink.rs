@@ -171,6 +171,8 @@ fn px_hash(x: i32, y: i32) -> u32 {
 
 /// One pass of the "diary drinks the ink" effect: erase the pixels whose hash
 /// falls in this stage. After `stages` passes the region is clean white.
+// Kept: the memory-conjure fade may return in a later polish pass.
+#[allow(dead_code)]
 pub fn dissolve_pass(surf: &mut Surface, region: BBox, stage: u32, stages: u32) {
     if region.is_empty() {
         return;
