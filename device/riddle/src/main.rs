@@ -57,6 +57,10 @@ fn idle_commit() -> Duration {
 const ORACLE_PATIENCE: Duration = Duration::from_secs(120);
 const REPLY_PX: f32 = 52.0;
 const MARGIN_X: i32 = 120;
+/// The thinking dot lives in the top-right corner, not page-center: with
+/// co-drawing the center of the page is the child's canvas, not Tom's.
+const THINK_X: i32 = SCREEN_W as i32 - 90;
+const THINK_Y: i32 = 90;
 
 const USAGE: &str = "\
 riddle — the diary of Tom Riddle
@@ -79,7 +83,6 @@ type OracleRx = mpsc::Receiver<Result<Event, String>>;
 
 enum State {
     Listening { last_pen: Option<Instant> },
-    Drinking { stage: u32, next: Instant, region: BBox, rx: OracleRx },
     Thinking { rx: OracleRx, pulse: Instant, blot_on: bool, since: Instant },
     Replying { plan: WritePlan, next: Instant, rx: Option<OracleRx> },
     Lingering { until: Instant, region: BBox },
@@ -395,6 +398,13 @@ fn run() -> std::io::Result<()> {
     let mut turn_reply = String::new();
     let mut turn_transcript: Option<String> = None;
     let mut turn_failed = false;
+    // Snapshot of `user_ink.stroke_list().len()` as of the last commit.
+    // Strokes at or past this index are "new": drawn since the diary last
+    // asked the oracle. Co-drawing keeps every committed stroke on the page
+    // (no more clearing after each turn), so "is there enough ink to answer"
+    // and "what should the oracle see as this turn's mark" must both count
+    // only what's new, not the whole page's history.
+    let mut committed_strokes: usize = 0;
     // Raw stylus contact, tracked in every state (the guide dismisses on it).
     // `stylus_on` is the level; `stylus_tapped` latches any contact seen this
     // loop iteration, so a tap that starts AND ends within one drain still
@@ -501,6 +511,24 @@ fn run() -> std::io::Result<()> {
                         }
                         *last_pen = Some(Instant::now());
                     }
+                    // Thinking no longer freezes the page: the child can keep
+                    // drawing right beside their own ink while Tom composes.
+                    // Same inking as Listening, but there is no idle timer
+                    // here to update — Thinking has no `last_pen`.
+                    State::Thinking { .. } => {
+                        pen_down = true;
+                        let d = match s.tool {
+                            pen::Tool::Pen => {
+                                let r = 2 + s.pressure * 3 / pen::MAX_PRESSURE;
+                                user_ink.pen_point(&mut surf, s.x, s.y, r)
+                            }
+                            pen::Tool::Eraser => user_ink.erase_point(&mut surf, s.x, s.y, 22),
+                        };
+                        if !d.is_empty() {
+                            ink_dirty.add(d.x0, d.y0, 0);
+                            ink_dirty.add(d.x1, d.y1, 0);
+                        }
+                    }
                     State::Lingering { region, .. } => {
                         state = State::FadingReply { stage: 0, next: Instant::now(), region };
                     }
@@ -531,6 +559,15 @@ fn run() -> std::io::Result<()> {
                             ink_dirty.add(d.x1, d.y1, 0);
                         }
                         *last_pen = Some(Instant::now());
+                    } else if let State::Thinking { .. } = state {
+                        // Same as Listening's inking: no idle timer to touch.
+                        pen_down = true;
+                        let r = 2 + ev.d.clamp(0, 100) / 45;
+                        let d = user_ink.pen_point(&mut surf, ev.x, ev.y, r);
+                        if !d.is_empty() {
+                            ink_dirty.add(d.x0, d.y0, 0);
+                            ink_dirty.add(d.x1, d.y1, 0);
+                        }
                     } else if let State::Lingering { region, .. } = state {
                         state = State::FadingReply { stage: 0, next: Instant::now(), region };
                     }
@@ -560,18 +597,38 @@ fn run() -> std::io::Result<()> {
         // ---- state machine ----
         state = match state {
             State::Listening { last_pen } => match last_pen {
-                Some(t) if !pen_down && t.elapsed() >= idle_commit() && !user_ink.is_empty() => {
-                    if region_all_white(&surf, user_ink.bbox) {
-                        // Everything was erased before the pause: nothing to
+                Some(t)
+                    if !pen_down
+                        && t.elapsed() >= idle_commit()
+                        && user_ink.stroke_list().len().saturating_sub(committed_strokes) >= 2 =>
+                {
+                    // `new_strokes >= 2` above already implies the page holds
+                    // ink; assert that invariant explicitly, since
+                    // `committed_strokes` is a raw index that only tracks
+                    // growth and could drift if ink were ever erased away
+                    // from under it.
+                    debug_assert!(!user_ink.is_empty());
+                    // Scope every commit-time check to the ink drawn since the
+                    // last commit, not the whole page's history: older,
+                    // already-answered strokes stay on the page untouched.
+                    let new_bbox = bbox_of(&user_ink.stroke_list()[committed_strokes..]);
+                    if region_all_white(&surf, new_bbox) {
+                        // The new ink was erased before the pause: nothing to
                         // commit (and no phantom "?" from erased strokes).
-                        user_ink.clear();
+                        // Mark it seen so it stops counting as "new ink"
+                        // without touching any older, already-committed ink.
+                        committed_strokes = user_ink.stroke_list().len();
                         State::Listening { last_pen: None }
-                    } else if help::looks_like_question_mark(user_ink.stroke_list()) {
+                    } else if help::looks_like_question_mark(&user_ink.stroke_list()[committed_strokes..]) {
                         // Absorb the "?" and open the guide instead of asking.
+                        // Legacy page-clearing behavior: this gesture still
+                        // wipes the whole page until set_profile (phase 2)
+                        // disables it for the child profile.
                         let (qx, qy, qw, qh) = user_ink.bbox.rect();
                         surf.fill_rect(qx as usize, qy as usize, qw as usize, qh as usize, WHITE);
                         disp.update(qx, qy, qw, qh, false);
                         user_ink.clear();
+                        committed_strokes = 0;
                         let panel = help::show(&mut surf, &font, takeover);
                         let (px, py, pw, ph) = panel.region.rect();
                         disp.update(px, py, pw, ph, false);
@@ -580,25 +637,27 @@ fn run() -> std::io::Result<()> {
                     } else if oracle.is_none() {
                         // No spirit at all: don't eat ink that nothing will
                         // answer — leave the writing and put the reason below.
-                        let y = (user_ink.bbox.y1 + 90).min(SCREEN_H as i32 - 400);
+                        let y = (new_bbox.y1 + 90).min(SCREEN_H as i32 - 400);
                         let plan = plan_reply(&font, &oracle_excuse("no oracle"), Some(y));
                         State::Replying { plan, next: Instant::now(), rx: None }
                     } else {
                         if let Err(e) = user_ink.to_png(&surf, PNG_PATH) {
                             eprintln!("riddle: rasterize failed: {e}");
                         }
-                        // Remember this page: strokes now (they're cleared
-                        // after the drink), transcript/reply as they stream.
+                        // Remember this turn's new strokes for memory — the
+                        // page itself is no longer cleared: co-drawing keeps
+                        // every committed mark in view beside Tom's reply.
                         turn_id = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_secs())
                             .unwrap_or(0);
-                        turn_strokes = user_ink.stroke_list().to_vec();
+                        turn_strokes = user_ink.stroke_list()[committed_strokes..].to_vec();
+                        committed_strokes = user_ink.stroke_list().len();
                         turn_reply.clear();
                         turn_transcript = None;
                         turn_failed = false;
-                        // Ask NOW: the model streams while the diary drinks the
-                        // ink, hiding most of the reply latency in the animation.
+                        // Ask NOW: the model streams while the diary thinks,
+                        // hiding most of the reply latency in the animation.
                         let (tx, rx) = mpsc::channel();
                         if let Some(ref o) = oracle {
                             o.ask(PNG_PATH, &build_ctx(&store), tx);
@@ -608,34 +667,18 @@ fn run() -> std::io::Result<()> {
                         if std::env::var_os("RIDDLE_KEEP_PAGE").is_none() {
                             let _ = std::fs::remove_file(PNG_PATH);
                         }
-                        let region = user_ink.bbox;
-                        State::Drinking { stage: 0, next: Instant::now(), region, rx }
+                        // The child's ink stays on the page: no dissolve, no
+                        // Drinking state — straight to Thinking.
+                        State::Thinking { rx, pulse: Instant::now(), blot_on: false, since: Instant::now() }
                     }
                 }
                 _ => State::Listening { last_pen },
             },
 
-            State::Drinking { stage, next, region, rx } => {
-                const STAGES: u32 = 14;
-                if Instant::now() >= next {
-                    ink::dissolve_pass(&mut surf, region, stage, STAGES);
-                    let (x, y, w, h) = region.rect();
-                    disp.update(x, y, w, h, true);
-                    if stage + 1 >= STAGES {
-                        user_ink.clear();
-                        State::Thinking { rx, pulse: Instant::now(), blot_on: false, since: Instant::now() }
-                    } else {
-                        State::Drinking { stage: stage + 1, next: Instant::now() + Duration::from_millis(70), region, rx }
-                    }
-                } else {
-                    State::Drinking { stage, next, region, rx }
-                }
-            }
-
             State::Thinking { rx, pulse, blot_on, since } => match rx.try_recv() {
                 Ok(result) => {
-                    surf.fill_rect(SCREEN_W / 2 - 14, SCREEN_H / 2 - 14, 28, 28, WHITE);
-                    disp.update(SCREEN_W as i32 / 2 - 14, SCREEN_H as i32 / 2 - 14, 28, 28, true);
+                    surf.fill_rect((THINK_X - 14) as usize, (THINK_Y - 14) as usize, 28, 28, WHITE);
+                    disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
                     // First streamed event: start writing now; keep the
                     // receiver so the rest of the reply can append itself.
                     match result {
@@ -676,18 +719,17 @@ fn run() -> std::io::Result<()> {
                         // The oracle never answered (stalled stream, dead pi):
                         // stop pulsing and say so instead of thinking forever.
                         eprintln!("riddle: oracle timed out after {}s", ORACLE_PATIENCE.as_secs());
-                        surf.fill_rect(SCREEN_W / 2 - 14, SCREEN_H / 2 - 14, 28, 28, WHITE);
-                        disp.update(SCREEN_W as i32 / 2 - 14, SCREEN_H as i32 / 2 - 14, 28, 28, true);
+                        surf.fill_rect((THINK_X - 14) as usize, (THINK_Y - 14) as usize, 28, 28, WHITE);
+                        disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
                         let plan = plan_reply(&font, &oracle_excuse("timed out"), None);
                         State::Replying { plan, next: Instant::now(), rx: None }
                     } else if pulse.elapsed() >= Duration::from_millis(600) {
-                        let (cx, cy) = (SCREEN_W as i32 / 2, SCREEN_H as i32 / 2);
                         if blot_on {
-                            surf.fill_rect(cx as usize - 14, cy as usize - 14, 28, 28, WHITE);
+                            surf.fill_rect((THINK_X - 14) as usize, (THINK_Y - 14) as usize, 28, 28, WHITE);
                         } else {
-                            surf.stamp(cx, cy, 9, BLACK);
+                            surf.stamp(THINK_X, THINK_Y, 9, BLACK);
                         }
-                        disp.update(cx - 14, cy - 14, 28, 28, true);
+                        disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
                         State::Thinking { rx, pulse: Instant::now(), blot_on: !blot_on, since }
                     } else {
                         State::Thinking { rx, pulse, blot_on, since }
@@ -899,6 +941,20 @@ fn run() -> std::io::Result<()> {
     eprintln!("riddle: the diary closes");
     disp.terminate();
     Ok(())
+}
+
+/// Bounding box of a set of finished strokes (4-tuples: x, y, radius,
+/// ms-since-page-start). Used to scope commit-time checks — "was this fully
+/// erased", "does this look like a ?" — to only the ink drawn since the last
+/// commit, not the whole page's co-drawn history.
+fn bbox_of(strokes: &[Vec<(i32, i32, i32, u32)>]) -> BBox {
+    let mut bbox = BBox::empty();
+    for stroke in strokes {
+        for &(x, y, r, _) in stroke {
+            bbox.add(x, y, r + 2);
+        }
+    }
+    bbox
 }
 
 /// True if the region no longer holds any dark pixels (fully erased).
