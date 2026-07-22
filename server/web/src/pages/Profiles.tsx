@@ -1,4 +1,5 @@
-import { AutoComplete, Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd'
+import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd'
+import CandidateInput from '../components/CandidateInput'
 import { useEffect, useState } from 'react'
 import { del, get, post, put } from '../api'
 
@@ -94,10 +95,9 @@ export default function Profiles() {
             <Select options={providers.map(p => ({ value: p.id, label: p.name }))}
                     onChange={(v) => fetchModels(v)} />
           </Form.Item>
-          <Form.Item name="model" label="模型（可从候选选择，也可直接手填）" rules={[{ required: true }]}>
-            <AutoComplete options={models.map(m => ({ value: m }))}
-                          filterOption={(i, o) => ((o?.value as string) ?? '').includes(i)}
-                          placeholder="gpt-4o-mini" />
+          <Form.Item name="model" label={`模型（候选 ${models.length} 个，点开选择或手填）`} rules={[{ required: true }]}>
+            <CandidateInput options={models.map(m => ({ value: m }))}
+                            placeholder="qwen3-vl-plus" />
           </Form.Item>
           <Form.Item name="temperature" label="temperature（留空用默认）"><InputNumber min={0} max={2} step={0.1} /></Form.Item>
           <Form.Item name="max_tokens" label="max_tokens"><InputNumber min={100} max={20000} /></Form.Item>

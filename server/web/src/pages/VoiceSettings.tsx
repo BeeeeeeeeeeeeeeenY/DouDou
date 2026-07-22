@@ -1,10 +1,9 @@
-import { AutoComplete, Button, Card, Form, Input, InputNumber, Select, Space, message } from 'antd'
+import { Button, Card, Form, Input, InputNumber, Select, Space, message } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { get, post, postForm, put } from '../api'
+import CandidateInput from '../components/CandidateInput'
 
 type Voice = { id: string; name: string }
-
-const contains = (input: string, text: string) => text.toLowerCase().includes(input.toLowerCase())
 
 export default function VoiceSettings() {
   const [providers, setProviders] = useState<{ id: number; name: string }[]>([])
@@ -100,10 +99,9 @@ export default function VoiceSettings() {
           <Select options={providerOpts} allowClear
                   onChange={v => fetchModels(v, setSttModels)} />
         </Form.Item>
-        <Form.Item name="stt_model" label="模型（可从候选选择，也可手填）">
-          <AutoComplete options={sttModels.map(m => ({ value: m }))}
-                        filterOption={(i, o) => contains(i, String(o?.value ?? ''))}
-                        placeholder="如 qwen3-asr-flash-2026-02-10" />
+        <Form.Item name="stt_model" label={`模型（候选 ${sttModels.length} 个，点开选择或手填）`}>
+          <CandidateInput options={sttModels.map(m => ({ value: m }))}
+                          placeholder="如 qwen3-asr-flash-2026-02-10" />
         </Form.Item>
         <Space>
           <Button onClick={recordTest} danger={recording}>
@@ -117,15 +115,13 @@ export default function VoiceSettings() {
           <Select options={providerOpts} allowClear
                   onChange={v => { fetchModels(v, setTtsModels); fetchVoices(v) }} />
         </Form.Item>
-        <Form.Item name="tts_model" label="模型（可从候选选择，也可手填）">
-          <AutoComplete options={ttsModels.map(m => ({ value: m }))}
-                        filterOption={(i, o) => contains(i, String(o?.value ?? ''))}
-                        placeholder="如 speech-2.6-hd" />
+        <Form.Item name="tts_model" label={`模型（候选 ${ttsModels.length} 个，点开选择或手填）`}>
+          <CandidateInput options={ttsModels.map(m => ({ value: m }))}
+                          placeholder="如 speech-2.6-hd" />
         </Form.Item>
-        <Form.Item name="tts_voice" label={`音色（候选 ${voices.length} 个，可搜索，也可手填）`}>
-          <AutoComplete options={voices.map(v => ({ value: v.id, label: `${v.name}（${v.id}）` }))}
-                        filterOption={(i, o) => contains(i, `${o?.label ?? ''}${o?.value ?? ''}`)}
-                        placeholder="如 lovely_girl 萌萌女童" />
+        <Form.Item name="tts_voice" label={`音色（候选 ${voices.length} 个，点开选择，可搜索或手填）`}>
+          <CandidateInput options={voices.map(v => ({ value: v.id, label: `${v.name}（${v.id}）` }))}
+                          placeholder="如 lovely_girl 萌萌女童" />
         </Form.Item>
         <Form.Item name="tts_speed" label="语速"><InputNumber min={0.5} max={2} step={0.1} /></Form.Item>
         <Form.Item name="tts_test_text" label="试听文本"><Input placeholder="你好，我是豆豆。" /></Form.Item>
