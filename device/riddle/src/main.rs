@@ -34,7 +34,20 @@ use surface::{Surface, BLACK, FADED, WHITE};
 const FONT_TTF: &[u8] = include_bytes!("../fonts/PingFangShiGuang.ttf");
 const PNG_PATH: &str = "/tmp/riddle-page.png";
 
-const IDLE_COMMIT: Duration = Duration::from_millis(2800);
+/// Pen-idle threshold before a page commits. 3-4 岁孩子涂鸦停顿频繁，默认
+/// 从 riddle 的 2.8s 放宽到 6s；oracle.env 里 RIDDLE_IDLE_COMMIT_SECS 可调。
+fn idle_commit_from(raw: Option<&str>) -> Duration {
+    let secs = raw.and_then(|v| v.parse::<f64>().ok()).filter(|s| *s > 0.0).unwrap_or(6.0);
+    Duration::from_millis((secs * 1000.0) as u64)
+}
+
+fn idle_commit() -> Duration {
+    static CACHE: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let v = std::env::var("RIDDLE_IDLE_COMMIT_SECS");
+        idle_commit_from(v.as_deref().ok())
+    })
+}
 /// How long the diary waits on a silent oracle before giving up on the turn.
 /// Generous: thinking models can lead with a long silence.
 const ORACLE_PATIENCE: Duration = Duration::from_secs(120);
@@ -414,7 +427,7 @@ fn run() -> std::io::Result<()> {
         // ---- state machine ----
         state = match state {
             State::Listening { last_pen } => match last_pen {
-                Some(t) if !pen_down && t.elapsed() >= IDLE_COMMIT && !user_ink.is_empty() => {
+                Some(t) if !pen_down && t.elapsed() >= idle_commit() && !user_ink.is_empty() => {
                     if region_all_white(&surf, user_ink.bbox) {
                         // Everything was erased before the pause: nothing to
                         // commit (and no phantom "?" from erased strokes).
@@ -914,4 +927,17 @@ fn append_reply(font: &script::FontStack<'_>, plan: &mut WritePlan, more: &str) 
     plan.region.add(cont.region.x1, cont.region.y1, 0);
     plan.strokes.extend(cont.strokes);
     plan.next_y = cont.next_y;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_commit_defaults_to_6s_and_parses_overrides() {
+        assert_eq!(idle_commit_from(None), Duration::from_millis(6000));
+        assert_eq!(idle_commit_from(Some("4.5")), Duration::from_millis(4500));
+        assert_eq!(idle_commit_from(Some("abc")), Duration::from_millis(6000));
+        assert_eq!(idle_commit_from(Some("0")), Duration::from_millis(6000)); // 0 无意义，回退
+    }
 }
