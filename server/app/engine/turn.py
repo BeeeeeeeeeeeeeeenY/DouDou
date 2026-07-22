@@ -21,6 +21,8 @@ class TurnInput:
     history: list[dict] = field(default_factory=list)
     device_protocol_suffix: str = ""
     use_voice_hint: bool = False
+    lesson_context: str = ""
+    lesson_run_id: int | None = None
 
 
 class TurnRunner:
@@ -45,6 +47,7 @@ class TurnRunner:
         t0 = time.monotonic()
         full: list[str] = []
         turn = Turn(source=tin.source, input_text=tin.text)
+        turn.lesson_run_id = tin.lesson_run_id
         if tin.image_png:
             turn.input_image_path = self._save_file("images", "png", tin.image_png)
         if tin.audio:
@@ -73,6 +76,7 @@ class TurnRunner:
                 self.system_prompt = assemble_system_prompt(
                     profile.persona_text,
                     voice_hint=profile.voice_hint if tin.use_voice_hint else "",
+                    lesson_context=tin.lesson_context,
                     protocol_suffix=tin.device_protocol_suffix,
                 )
                 turn.system_prompt = self.system_prompt
