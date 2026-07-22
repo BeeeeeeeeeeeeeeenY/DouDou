@@ -194,3 +194,56 @@ def test_stt_test_uses_form_overrides(client):
                     files={"audio": ("a.webm", b"xx", "audio/webm")},
                     data={"stt_provider_id": str(p["id"]), "stt_model": "whisper-1"})
     assert r.json() == {"text": "带覆盖参数"}
+
+
+@respx.mock
+async def test_transcribe_retries_transport_error_once():
+    route = respx.post("https://v.test/v1/audio/transcriptions").mock(
+        side_effect=[httpx.ReadTimeout("卡住"), httpx.Response(200, json={"text": "我也叫兜兜"})]
+    )
+    text = await transcribe("https://v.test/v1", "sk", "whisper-1", b"AUDIO", "a.webm")
+    assert text == "我也叫兜兜"
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_transcribe_double_transport_failure_raises_599():
+    route = respx.post("https://v.test/v1/audio/transcriptions").mock(
+        side_effect=[httpx.ReadTimeout("卡"), httpx.ConnectError("断")]
+    )
+    from app.engine.upstream import UpstreamError
+    with pytest.raises(UpstreamError) as ei:
+        await transcribe("https://v.test/v1", "sk", "whisper-1", b"AUDIO", "a.webm")
+    assert ei.value.status_code == 599
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_transcribe_http_error_not_retried():
+    route = respx.post("https://v.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(400, text="bad audio")
+    )
+    from app.engine.upstream import UpstreamError
+    with pytest.raises(UpstreamError) as ei:
+        await transcribe("https://v.test/v1", "sk", "whisper-1", b"AUDIO", "a.webm")
+    assert ei.value.status_code == 400
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_dashscope_transcribe_retries_transport_error():
+    route = respx.post("https://x.aliyuncs.com/compatible-mode/v1/chat/completions").mock(
+        side_effect=[
+            httpx.ReadTimeout("卡住"),
+            httpx.Response(200, json={"choices": [{"message": {"content": "我也叫兜兜"}}]}),
+        ]
+    )
+    text = await transcribe("https://x.aliyuncs.com/compatible-mode/v1", "sk",
+                            "qwen3-asr-flash", b"AUDIO", "say.webm")
+    assert text == "我也叫兜兜"
+    assert route.call_count == 2
+
+
+def test_stt_timeout_is_20s():
+    from app.engine import stt
+    assert stt.STT_TIMEOUT.read == 20.0  # 几秒的录音没理由等 60 秒
