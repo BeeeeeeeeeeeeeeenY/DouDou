@@ -23,7 +23,7 @@ def make_sessionmaker(data_dir: str):
     try:
         _migrate(engine)
     except OperationalError:
-        pass  # 双进程竞争给旧库加列，输家忽略即可（列已被另一进程补上）
+        _migrate(engine)  # 竞态输家重试即无事；真故障则此处重抛，宁可启动时炸也不留隐患
     try:
         models.Base.metadata.create_all(engine)
     except OperationalError:

@@ -176,7 +176,8 @@ export default function Curricula() {
             title: '状态', dataIndex: 'status', render: (v: string, r) => (
               <Select size="small" value={v} style={{ width: 110 }}
                 onChange={s => fixRun(r, { status: s })}
-                options={Object.entries(RUN_STATUS).map(([value, label]) => ({ value, label }))}
+                options={Object.entries(RUN_STATUS).filter(([value]) => value !== 'running')
+                  .map(([value, label]) => ({ value, label }))}
                 labelRender={() => <Tag color={RUN_COLOR[v]}>{RUN_STATUS[v] ?? v}</Tag>} />
             ),
           },

@@ -2051,7 +2051,7 @@ git commit -m "docs(server): curriculum usage and acceptance checklist"
 3. **打标失败兜底**（终审补强）：打标 JSON 损坏时，run 以 `close_run_malformed` 关闭——`status=abandoned`、`raw_report={"_raw": 原文}`、作品照常挂靠；标记文本仍绝不进入回复/TTS。
 4. **作品挂靠触发点**：`close_run_with_report`（正常收尾）与 `end_lesson_run`（家长手动结束）都挂靠；`start_lesson_run` 的遗留 run 清扫**不**挂靠（跨天窗口会误挂无关涂鸦）。
 5. **标记剥离下沉引擎**：`⟦lesson_report⟧` 的剥离在 `TurnRunner` 持久化之前完成（非计划原文的路由器层剥离），使「标记绝不落库」成为绝对不变量；`TurnRunner` 暴露 `lesson_report`/`lesson_report_raw` 给路由器。
-6. **搁置项（前端批次时顺手处理）**：admin_turns 接口暴露 `lesson_run_id`；`artifact_images` 按 `artifact_turn_ids` 保序；课程/课时级联删除时清理 turns 的悬空 `lesson_run_id`；`update_curriculum` 禁止把 slug 置空。
+6. **搁置项（终审裁决：随后续加固批次处理，不阻塞合并）**：admin_turns 接口暴露 `lesson_run_id`；`artifact_images` 按 `artifact_turn_ids` 保序；课程/课时级联删除时清理 turns 的悬空 `lesson_run_id`；`update_curriculum` 禁止把 slug 置空；课程列表未选中行的当前课时列显示裸 id；「重开新一轮」与「作品手动挂靠/解除」的专用 UI（二期）。
 
 ## Self-Review 结论（已按此修订）
 

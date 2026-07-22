@@ -43,3 +43,15 @@ def test_legacy_turns_table_gains_column(tmp_path):
     maker = make_sessionmaker(str(tmp_path))
     with maker() as s:
         s.execute(text("SELECT lesson_run_id FROM turns"))  # 列不存在会抛 OperationalError
+
+
+def test_migration_idempotent_on_second_startup(tmp_path):
+    # 二次启动（或竞态重试）时列已存在，_migrate 应静默通过
+    con = sqlite3.connect(tmp_path / "doudou.db")
+    con.execute("CREATE TABLE turns (id INTEGER PRIMARY KEY, source VARCHAR(10))")
+    con.commit()
+    con.close()
+    make_sessionmaker(str(tmp_path))
+    maker = make_sessionmaker(str(tmp_path))  # 第二次启动不得抛错
+    with maker() as s:
+        s.execute(text("SELECT lesson_run_id FROM turns"))
