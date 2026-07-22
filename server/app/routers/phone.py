@@ -16,11 +16,14 @@ router = APIRouter(prefix="/api/phone")
 
 @router.post("/voice-turn")
 async def voice_turn(request: Request, audio: UploadFile, history: str = Form("[]")):
-    pairs = json.loads(history)  # [["user","assistant"], ...]
-    msgs: list[dict] = []
-    for u, a in pairs:
-        msgs.append({"role": "user", "content": u})
-        msgs.append({"role": "assistant", "content": a})
+    try:
+        pairs = json.loads(history)  # [["user","assistant"], ...]
+        msgs: list[dict] = []
+        for u, a in pairs:
+            msgs.append({"role": "user", "content": str(u)})
+            msgs.append({"role": "assistant", "content": str(a)})
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, f"history 参数格式错误：{e}")
 
     data = await audio.read()
     tin = TurnInput(source="phone", audio=data,

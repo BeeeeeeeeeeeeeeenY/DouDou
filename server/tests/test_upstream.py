@@ -58,6 +58,17 @@ async def test_stream_chat_error_raises():
 
 
 @respx.mock
+async def test_stream_chat_transport_error_wrapped():
+    respx.post("https://api.test/v1/chat/completions").mock(
+        side_effect=httpx.ConnectError("boom")
+    )
+    with pytest.raises(UpstreamError) as ei:
+        async for _ in stream_chat("https://api.test/v1", "sk-x", build_chat_body("m", [])):
+            pass
+    assert ei.value.status_code == 599 and "ConnectError" in ei.value.detail
+
+
+@respx.mock
 async def test_stream_chat_skips_odd_shaped_payloads():
     """Regression test: odd-but-valid JSON lines should not crash the stream."""
     sse_with_odd_payloads = (

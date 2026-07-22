@@ -65,6 +65,33 @@ def test_voice_turn_unconfigured_400(client):
     assert r.status_code == 400 and "后台" in r.json()["detail"]
 
 
+def test_voice_turn_malformed_history_400(client):
+    r = client.post("/api/phone/voice-turn",
+                    files={"audio": ("a.webm", b"x", "audio/webm")},
+                    data={"history": "not json"})
+    assert r.status_code == 400
+
+
+@respx.mock
+def test_tts_transport_failure_degrades_gracefully(client, db):
+    setup(client)
+    respx.post("https://up.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "你好"})
+    )
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=SSE)
+    )
+    respx.post("https://up.test/v1/audio/speech").mock(
+        side_effect=httpx.ConnectError("tts down")
+    )
+    r = client.post("/api/phone/voice-turn",
+                    files={"audio": ("say.webm", b"AUDIO", "audio/webm")},
+                    data={"history": "[]"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["reply_text"] == "我们来数星星呀。" and j["audio_url"] == ""
+
+
 def test_files_route_rejects_traversal(client):
     assert client.get("/api/files/audio/..%2Fdoudou.db").status_code in (400, 404)
     assert client.get("/api/files/other/x.png").status_code == 400
