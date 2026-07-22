@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from app.config import resolve_data_dir
 from app.db import make_sessionmaker
@@ -26,5 +26,20 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     app.include_router(openai_compat.router)
     app.include_router(phone.router)
     app.include_router(files.router)
+
+    import os
+
+    from fastapi.responses import FileResponse
+
+    dist = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "dist")
+    if os.path.isdir(dist):
+        @app.get("/{path:path}")
+        def spa(path: str):
+            if path == "api" or path == "v1" or path.startswith(("api/", "v1/")):
+                raise HTTPException(404)
+            full = os.path.normpath(os.path.join(dist, path))
+            if full.startswith(dist + os.sep) and os.path.isfile(full):
+                return FileResponse(full)
+            return FileResponse(os.path.join(dist, "index.html"))
 
     return app

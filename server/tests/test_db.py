@@ -1,4 +1,5 @@
 from app import models
+from app.db import make_sessionmaker
 
 
 def test_health(client):
@@ -18,3 +19,11 @@ def test_data_subdirs_created(app):
     import os
     for sub in ("images", "audio"):
         assert os.path.isdir(os.path.join(app.state.data_dir, sub))
+
+
+def test_make_sessionmaker_idempotent(tmp_path):
+    # 模拟双进程首次启动竞争建表 / 插入单例行：第二次调用不应抛错
+    make_sessionmaker(str(tmp_path))
+    maker2 = make_sessionmaker(str(tmp_path))
+    with maker2() as s:
+        assert s.query(models.VoiceSettings).count() == 1

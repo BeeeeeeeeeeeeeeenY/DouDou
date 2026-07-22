@@ -63,3 +63,19 @@ def test_stt_test_unconfigured_400(client):
     r = client.post("/api/admin/voice/stt-test", files={"audio": ("a.webm", b"xx", "audio/webm")})
     assert r.status_code == 400
     assert "语音配置" in r.json()["detail"]
+
+
+@respx.mock
+def test_stt_test_upstream_error_502(client):
+    p = client.post("/api/admin/providers",
+                    json={"name": "v", "base_url": "https://v.test/v1", "api_key": "sk"}).json()
+    client.put("/api/admin/voice-settings", json={
+        "stt_provider_id": p["id"], "stt_model": "whisper-1",
+        "tts_provider_id": p["id"], "tts_model": "tts-1", "tts_voice": "alloy",
+    })
+    respx.post("https://v.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(401, text='{"error":"bad key"}')
+    )
+    r = client.post("/api/admin/voice/stt-test", files={"audio": ("a.webm", b"xx", "audio/webm")})
+    assert r.status_code == 502
+    assert "语音服务出错" in r.json()["detail"]

@@ -12,6 +12,15 @@ from app.engine.upstream import UpstreamError, build_chat_body, stream_chat
 from app.models import Profile, Provider, Turn
 
 
+def _audio_ext(filename: str) -> str:
+    """从上传文件名推断存盘扩展名（如 say.m4a → m4a），推断不出就退回 webm。"""
+    if "." in filename:
+        ext = filename.rsplit(".", 1)[-1].lower()
+        if ext.isalnum() and len(ext) <= 4:
+            return ext
+    return "webm"
+
+
 @dataclass
 class TurnInput:
     source: str
@@ -54,7 +63,7 @@ class TurnRunner:
         if tin.image_png:
             turn.input_image_path = self._save_file("images", "png", tin.image_png)
         if tin.audio:
-            turn.input_audio_path = self._save_file("audio", "webm", tin.audio)
+            turn.input_audio_path = self._save_file("audio", _audio_ext(tin.audio_filename), tin.audio)
         try:
             with self._sm() as db:
                 profile = db.query(Profile).filter(Profile.is_active.is_(True)).first()

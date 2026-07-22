@@ -95,3 +95,13 @@ def test_tts_transport_failure_degrades_gracefully(client, db):
 def test_files_route_rejects_traversal(client):
     assert client.get("/api/files/audio/..%2Fdoudou.db").status_code in (400, 404)
     assert client.get("/api/files/other/x.png").status_code == 400
+
+
+def test_files_route_content_type_by_extension(client, app):
+    import os
+    path = os.path.join(app.state.data_dir, "audio", "x.webm")
+    with open(path, "wb") as f:
+        f.write(b"WEBMDATA")
+    r = client.get("/api/files/audio/x.webm")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/webm"
