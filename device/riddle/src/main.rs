@@ -67,6 +67,8 @@ usage:
   riddle --oracle-test [PNG]  run one oracle turn against PNG (default
                               /tmp/riddle-page.png) and print the streamed
                               reply; verifies key + endpoint + model
+  riddle --cards-test F [OUT] render a /turn fixture to a PNG (no device
+                              needed)
   riddle --version            print the version
 
 configuration lives in oracle.env next to the binary — see
@@ -120,6 +122,12 @@ fn main() {
         Some("--oracle-test") => {
             let png = args.get(2).map(String::as_str).unwrap_or(PNG_PATH);
             std::process::exit(oracle_test(png));
+        }
+        // Diagnostic: render a /turn fixture (fake ink + response JSON) to a
+        // full-page PNG, off-screen. No device, no network — lets a human
+        // eyeball every card type before ever wiring cards into run().
+        Some("--cards-test") => {
+            std::process::exit(cards_test(&args));
         }
         Some("--version" | "-V") => {
             println!("riddle {}", env!("CARGO_PKG_VERSION"));
@@ -181,6 +189,127 @@ fn oracle_test(png: &str) -> i32 {
     }
     println!("\n--- reply complete ({}ms, {} chars) ---", t0.elapsed().as_millis(), got.len());
     if got.trim().is_empty() { 1 } else { 0 }
+}
+
+/// Diagnostic: parse a `/turn` fixture (fake child ink + a `response` body)
+/// and render every paper card it contains onto a blank in-memory page,
+/// off-screen. No device, no network: lets a human eyeball card placement
+/// (and a developer catch drop reasons on stderr) before cards are wired
+/// into `run()`'s real turn loop. Exit codes: 2 = usage/read/parse error,
+/// 1 = the PNG failed to write or nothing rendered, 0 = at least one plan.
+fn cards_test(args: &[String]) -> i32 {
+    let Some(path) = args.get(2) else {
+        eprintln!("usage: riddle --cards-test fixture.json [out.png]");
+        return 2;
+    };
+    let out = args.get(3).map(String::as_str).unwrap_or("/tmp/riddle-cards.png");
+    let raw = match std::fs::read_to_string(path) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("read {path}: {e}");
+            return 2;
+        }
+    };
+    let fixture: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("bad json: {e}");
+            return 2;
+        }
+    };
+    let resp = match cards::parse_turn_response(&fixture["response"].to_string()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("bad response: {e}");
+            return 2;
+        }
+    };
+    // The font is compiled into the binary, not fixture-supplied — a
+    // failure here means a broken build, not bad input, so `expect` (rather
+    // than degrading) matches how `run()` treats the same failure.
+    let primary = FontRef::try_from_slice(FONT_TTF).expect("font");
+    let font = script::FontStack::new(primary, None);
+
+    let mut buf = vec![0u8; SCREEN_W * SCREEN_H * 4];
+    let mut surf =
+        Surface::new(buf.as_mut_ptr(), buf.len(), SCREEN_W, SCREEN_H, SCREEN_W * 4, surface::PixFmt::Rgb32);
+    surf.fill_rect(0, 0, SCREEN_W, SCREEN_H, WHITE);
+
+    // Fake child ink (a polyline per stroke, brush radius 3) — optional; an
+    // absent or empty "ink" array just leaves the page blank and the anchor
+    // at page center. Every access below degrades to `None`/skip rather
+    // than panicking on a malformed point, since this walks fixture content
+    // straight out of an untrusted JSON file.
+    let mut anchor = (SCREEN_W as i32 / 2, SCREEN_H as i32 / 2);
+    if let Some(strokes) = fixture["ink"].as_array() {
+        for s in strokes {
+            let pts: Vec<(i32, i32)> = s
+                .as_array()
+                .map(|v| v.iter().filter_map(|p| Some((p[0].as_i64()? as i32, p[1].as_i64()? as i32))).collect())
+                .unwrap_or_default();
+            for w in pts.windows(2) {
+                surf.brush_line(w[0].0, w[0].1, w[1].0, w[1].1, 3, BLACK);
+            }
+            if let Some(&(x, y)) = pts.last() {
+                anchor = (x + 60, y + 60);
+            }
+        }
+    }
+
+    let mut map = layout::InkMap::from_surface(&surf);
+    let mut rendered = 0;
+    for card in &resp.paper_cards {
+        let plans = cardrender::plan_card(card, &mut map, &font, anchor);
+        if plans.is_empty() {
+            eprintln!("card dropped: {card:?}");
+            continue;
+        }
+        for p in plans {
+            for stroke in &p.strokes {
+                for w in stroke.windows(2) {
+                    surf.brush_line(w[0].0, w[0].1, w[1].0, w[1].1, 2, p.color);
+                }
+                if let Some(&(x, y)) = stroke.first() {
+                    surf.stamp(x, y, 2, p.color);
+                }
+            }
+            // plan_card already marked this plan's region on `map` (via its
+            // internal commit()); no need to mark_rect again here.
+            let (x, y, w, h) = p.region.rect();
+            eprintln!("card at ({x},{y}) {w}x{h} color={:#06x}", p.color);
+            rendered += 1;
+        }
+    }
+
+    if let Err(e) = write_page_png(&surf, out) {
+        eprintln!("png: {e}");
+        return 1;
+    }
+    eprintln!("wrote {out} ({rendered} plans, coverage {:.2})", map.coverage());
+    (rendered == 0) as i32
+}
+
+/// Full-page grayscale PNG (2x downscale -> 810x1080, plenty for eyeballing).
+fn write_page_png(surf: &Surface, path: &str) -> std::io::Result<()> {
+    let (w, h) = (surf.w / 2, surf.h / 2);
+    let mut gray = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = 0u32;
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    acc += surf.luma((x * 2 + dx) as i32, (y * 2 + dy) as i32) as u32;
+                }
+            }
+            gray[y * w + x] = (acc / 4) as u8;
+        }
+    }
+    let file = std::fs::File::create(path)?;
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+    enc.set_color(png::ColorType::Grayscale);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut writer = enc.write_header().map_err(std::io::Error::other)?;
+    writer.write_image_data(&gray).map_err(std::io::Error::other)
 }
 
 /// What the diary sends alongside the page: its memory of recent turns and

@@ -17,11 +17,12 @@ use crate::surface;
 /// animation speed (points drawn per frame), and the dirty region the
 /// caller must mark occupied (already `map.mark_rect`'d by `plan_card`
 /// itself, but marking is idempotent so the caller may do it again).
-// Temporary: consumed by the cards-test harness task.
-#[allow(dead_code)]
 pub struct RenderPlan {
     pub strokes: Vec<Vec<(i32, i32)>>,
     pub color: u16,
+    /// Temporary: read once a live draw loop animates render plans over
+    /// time; --cards-test draws every point at once and has no use for it.
+    #[allow(dead_code)]
     pub points_per_frame: i32,
     pub region: fb::BBox,
 }
@@ -929,8 +930,6 @@ fn plan_page(items: &[(cards::Card, (f32, f32, f32, f32))], map: &mut layout::In
 /// and this returns an empty vec. Every plan this function returns has
 /// already been `mark_rect`'d onto `map` — the caller may mark again
 /// (idempotent), but does not have to.
-// Temporary: consumed by the cards-test harness task.
-#[allow(dead_code)]
 pub fn plan_card(
     card: &cards::Card,
     map: &mut layout::InkMap,
