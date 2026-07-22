@@ -90,3 +90,44 @@ def test_runs_list_and_correction(client, db):
     r = client.put(f"/api/admin/lesson-runs/{run.id}",
                    json={"status": "skipped", "parent_note": "当天生病"})
     assert r.json()["status"] == "skipped" and r.json()["parent_note"] == "当天生病"
+
+
+def test_status_cannot_bypass_activate(client):
+    a = make_curriculum(client, slug="a")
+    b = make_curriculum(client, slug="b")
+    client.post(f"/api/admin/curricula/{a['id']}/activate")
+    r = client.post("/api/admin/curricula", json={"slug": "x", "title": "直设", "status": "active"})
+    assert r.status_code == 400
+    r = client.put(f"/api/admin/curricula/{b['id']}", json={"status": "active"})
+    assert r.status_code == 400
+    r = client.put(f"/api/admin/curricula/{b['id']}", json={"status": "怪值"})
+    assert r.status_code == 400
+    by_slug = {x["slug"]: x["status"] for x in client.get("/api/admin/curricula").json()}
+    assert by_slug == {"a": "active", "b": "draft"}
+
+
+def test_update_duplicate_slug_400(client):
+    make_curriculum(client, slug="a")
+    b = make_curriculum(client, slug="b")
+    r = client.put(f"/api/admin/curricula/{b['id']}", json={"slug": "a"})
+    assert r.status_code == 400
+    r = client.put(f"/api/admin/curricula/{b['id']}", json={"slug": "b", "title": "保留自身slug"})
+    assert r.status_code == 200
+
+
+def test_delete_pointed_lesson_clears_pointer(client):
+    c = make_curriculum(client)
+    l1 = make_lesson(client, c["id"], seq=1)
+    client.put(f"/api/admin/curricula/{c['id']}/pointer", json={"lesson_id": l1["id"]})
+    client.delete(f"/api/admin/lessons/{l1['id']}")
+    assert client.get("/api/admin/curricula").json()[0]["current_lesson_id"] is None
+
+
+def test_run_invalid_status_400(client, db):
+    c = make_curriculum(client)
+    l1 = make_lesson(client, c["id"], seq=1)
+    run = models.LessonRun(lesson_id=l1["id"])
+    db.add(run)
+    db.commit()
+    r = client.put(f"/api/admin/lesson-runs/{run.id}", json={"status": "怪"})
+    assert r.status_code == 400

@@ -11,6 +11,7 @@ CUR_FIELDS = ("slug", "title", "age_band", "description", "status")
 LESSON_FIELDS = ("seq", "slug", "title", "goal_text", "script_text", "segments",
                  "duration_min", "materials", "enhancements")
 RUN_STATUS = ("running", "completed", "partial", "skipped", "abandoned")
+SETTABLE_STATUS = ("draft", "archived")
 
 
 class CurriculumIn(BaseModel):
@@ -73,6 +74,8 @@ def create_curriculum(body: CurriculumIn, db: Session = Depends(get_db)):
         raise HTTPException(400, "slug 不能为空")
     if db.query(Curriculum).filter(Curriculum.slug == body.slug).first():
         raise HTTPException(400, "slug 已存在")
+    if body.status is not None and body.status not in SETTABLE_STATUS:
+        raise HTTPException(400, "status 只能设为 draft 或 archived；激活请用「设为生效」")
     c = Curriculum(slug=body.slug)
     for f in CUR_FIELDS[1:]:
         v = getattr(body, f)
@@ -86,6 +89,11 @@ def create_curriculum(body: CurriculumIn, db: Session = Depends(get_db)):
 @router.put("/curricula/{cid}")
 def update_curriculum(cid: int, body: CurriculumIn, db: Session = Depends(get_db)):
     c = _cur_or_404(db, cid)
+    if body.status is not None and body.status not in SETTABLE_STATUS:
+        raise HTTPException(400, "status 只能设为 draft 或 archived；激活请用「设为生效」")
+    if body.slug is not None and body.slug != c.slug:
+        if db.query(Curriculum).filter(Curriculum.slug == body.slug).first():
+            raise HTTPException(400, "slug 已存在")
     for f in CUR_FIELDS:
         v = getattr(body, f)
         if v is not None:
@@ -168,6 +176,9 @@ def delete_lesson(lid: int, db: Session = Depends(get_db)):
     if l is None:
         raise HTTPException(404, "课时不存在")
     db.query(LessonRun).filter(LessonRun.lesson_id == lid).delete()
+    db.query(Curriculum).filter(Curriculum.current_lesson_id == lid).update(
+        {Curriculum.current_lesson_id: None}
+    )
     db.delete(l)
     db.commit()
     return {"ok": True}
