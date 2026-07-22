@@ -32,10 +32,14 @@ export default function Profiles() {
 
   const save = async () => {
     const v = await form.validateFields()
-    if (editing?.id) await put(`/api/admin/profiles/${editing.id}`, v)
-    else await post('/api/admin/profiles', v)
-    setEditing(null)
-    reload()
+    try {
+      if (editing?.id) await put(`/api/admin/profiles/${editing.id}`, v)
+      else await post('/api/admin/profiles', v)
+      setEditing(null)
+      reload()
+    } catch (e) {
+      message.error(String(e))
+    }
   }
 
   return (
@@ -56,15 +60,19 @@ export default function Profiles() {
             <Space>
               {!r.is_active && (
                 <Button size="small" type="primary" onClick={async () => {
-                  await post(`/api/admin/profiles/${r.id}/activate`)
-                  message.success(`「${r.name}」已生效，平板与手机立即使用`)
-                  reload()
+                  try {
+                    await post(`/api/admin/profiles/${r.id}/activate`)
+                    message.success(`「${r.name}」已生效，平板与手机立即使用`)
+                    reload()
+                  } catch (e) {
+                    message.error(String(e))
+                  }
                 }}>设为生效</Button>
               )}
               <Button size="small" onClick={() => {
                 form.setFieldsValue(r); setEditing(r); fetchModels(r.provider_id ?? undefined)
               }}>编辑</Button>
-              <Button size="small" danger onClick={async () => { await del(`/api/admin/profiles/${r.id}`); reload() }}>删除</Button>
+              <Button size="small" danger onClick={async () => { try { await del(`/api/admin/profiles/${r.id}`); reload() } catch (e) { message.error(String(e)) } }}>删除</Button>
             </Space>
           ),
         },

@@ -18,10 +18,14 @@ export default function Providers() {
 
   const save = async () => {
     const v = await form.validateFields()
-    if (editing?.id) await put(`/api/admin/providers/${editing.id}`, v)
-    else await post('/api/admin/providers', v)
-    setEditing(null)
-    reload()
+    try {
+      if (editing?.id) await put(`/api/admin/providers/${editing.id}`, v)
+      else await post('/api/admin/providers', v)
+      setEditing(null)
+      reload()
+    } catch (e) {
+      message.error(String(e))
+    }
   }
 
   const test = async (id: number) => {
@@ -51,7 +55,7 @@ export default function Providers() {
             <Space>
               <Button size="small" loading={testing === r.id} onClick={() => test(r.id)}>测试连通</Button>
               <Button size="small" onClick={() => { form.setFieldsValue(r); setEditing(r) }}>编辑</Button>
-              <Button size="small" danger onClick={async () => { await del(`/api/admin/providers/${r.id}`); reload() }}>删除</Button>
+              <Button size="small" danger onClick={async () => { try { await del(`/api/admin/providers/${r.id}`); reload() } catch (e) { message.error(String(e)) } }}>删除</Button>
             </Space>
           ),
         },
