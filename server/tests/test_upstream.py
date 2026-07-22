@@ -55,3 +55,22 @@ async def test_stream_chat_error_raises():
             pass
     assert ei.value.status_code == 401
     assert "bad key" in ei.value.detail
+
+
+@respx.mock
+async def test_stream_chat_skips_odd_shaped_payloads():
+    """Regression test: odd-but-valid JSON lines should not crash the stream."""
+    sse_with_odd_payloads = (
+        "data: null\n\n"
+        "data: 123\n\n"
+        "data: []\n\n"
+        'data: {"choices": null}\n\n'
+        'data: {"choices": "x"}\n\n'
+        'data: {"choices":[{"delta":{"content":"好"}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    respx.post("https://api.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=sse_with_odd_payloads)
+    )
+    chunks = [c async for c in stream_chat("https://api.test/v1", "sk-x", build_chat_body("m", []))]
+    assert chunks == ["好"]

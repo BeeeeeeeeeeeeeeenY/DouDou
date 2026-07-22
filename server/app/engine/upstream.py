@@ -48,7 +48,7 @@ async def stream_chat(base_url: str, api_key: str, body: dict) -> AsyncIterator[
                     return
                 try:
                     delta = json.loads(data)["choices"][0].get("delta", {}).get("content")
-                except (json.JSONDecodeError, KeyError, IndexError):
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
                     continue
                 if delta:
                     yield delta
