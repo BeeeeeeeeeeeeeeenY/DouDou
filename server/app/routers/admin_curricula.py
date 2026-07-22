@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Curriculum, Lesson, LessonRun, Turn
+from app.seed_shapes import seed_shapes01
 
 router = APIRouter(prefix="/api/admin")
 
@@ -229,3 +230,8 @@ def update_run(rid: int, body: RunIn, db: Session = Depends(get_db)):
     db.commit()
     return {"id": run.id, "status": run.status, "parent_note": run.parent_note,
             "artifact_turn_ids": run.artifact_turn_ids or []}
+
+
+@router.post("/curricula/seed-shapes01")
+def seed_demo_curriculum(db: Session = Depends(get_db)):
+    return cur_json(seed_shapes01(db))
