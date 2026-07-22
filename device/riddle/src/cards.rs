@@ -313,10 +313,14 @@ fn convert_layout_item(
             return None;
         }
     };
-    let Some(rect) = item.rect_norm else {
+    let Some((x, y, w, h)) = item.rect_norm else {
         eprintln!("riddle: cards: dropping page layout item with no rect_norm");
         return None;
     };
+    // §14.2: rect_norm is the one place the server picks explicit
+    // coordinates — clamp every component to a sane normalized fraction
+    // before it ever reaches cardrender's pixel math (see `clamp01`).
+    let rect = (clamp01(x), clamp01(y), clamp01(w), clamp01(h));
     let card = convert_card(&item.card, max_text_chars, true)?;
     Some((card, rect))
 }
@@ -324,10 +328,19 @@ fn convert_layout_item(
 fn raw_common(raw: &RawCard) -> CardCommon {
     CardCommon {
         place: parse_place(raw.place.as_deref()),
-        anchor_norm: raw.anchor_norm,
+        anchor_norm: raw.anchor_norm.map(|(x, y)| (clamp01(x), clamp01(y))),
         size: parse_size(raw.size.as_deref()),
         pace: parse_pace(raw.pace.as_deref()),
     }
+}
+
+/// Clamp a server-supplied normalized coordinate into 0.0..=1.0. Every
+/// fraction handed to cardrender's pixel math (`rect_norm`, `anchor_norm`)
+/// must be a sane fraction of the page — an unclamped value like
+/// `2000000.0` overflows i32 in cardrender (debug panic) or explodes
+/// `brush_line`'s step count (release CPU freeze).
+fn clamp01(v: f32) -> f32 {
+    v.clamp(0.0, 1.0)
 }
 
 /// Truncate by Unicode scalar count, not bytes — a multi-byte-per-char
@@ -516,6 +529,44 @@ mod tests {
                 assert!((rect.2 - 0.8).abs() < 1e-6);
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn page_rect_and_anchor_are_clamped() {
+        // Two hostile layout items in one page: the first has a wildly
+        // out-of-range rect_norm (would overflow i32 in cardrender / explode
+        // brush_line's step count), the second has an out-of-range
+        // anchor_norm on its nested card. Both must come out clamped to
+        // 0.0..=1.0 rather than passing through raw.
+        let json = r#"{"turn_id":"t","spoken_text":"","paper_cards":[
+            {"type":"page","layout":[
+                {"card":{"type":"stamp","name":"star","count":1},"rect_norm":[2000000.0,-5.0,9.0,9.0]},
+                {"card":{"type":"text","content":"x","anchor_norm":[50.0,-1.0]},"rect_norm":[0.1,0.1,0.2,0.2]}
+            ]}
+        ],"page_action":"none","memory_tags":[]}"#;
+        let r = parse_turn_response(json).unwrap();
+        match &r.paper_cards[0] {
+            Card::Page { layout } => {
+                assert_eq!(layout.len(), 2);
+
+                let (_, rect) = &layout[0];
+                assert!((0.0..=1.0).contains(&rect.0), "x not clamped: {rect:?}");
+                assert!((0.0..=1.0).contains(&rect.1), "y not clamped: {rect:?}");
+                assert!((0.0..=1.0).contains(&rect.2), "w not clamped: {rect:?}");
+                assert!((0.0..=1.0).contains(&rect.3), "h not clamped: {rect:?}");
+
+                let (card, _) = &layout[1];
+                match card {
+                    Card::Text { common, .. } => {
+                        let (ax, ay) = common.anchor_norm.expect("anchor present");
+                        assert!((0.0..=1.0).contains(&ax), "anchor x not clamped: {ax}");
+                        assert!((0.0..=1.0).contains(&ay), "anchor y not clamped: {ay}");
+                    }
+                    other => panic!("expected text card, got {other:?}"),
+                }
+            }
+            other => panic!("expected page, got {other:?}"),
         }
     }
 

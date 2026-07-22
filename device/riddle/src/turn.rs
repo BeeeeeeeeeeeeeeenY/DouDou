@@ -71,8 +71,13 @@ pub fn build_request_json(m: &TurnRequestMeta) -> String {
             stroke
                 .iter()
                 .map(|&(x, y, r, t)| {
-                    let px = round4(x as f64 / SCREEN_W as f64);
-                    let py = round4(y as f64 / SCREEN_H as f64);
+                    // Clamped exactly like pressure below (spec §14.1: every
+                    // normalized coordinate on the wire is 0..1) — a pen
+                    // sample past the screen edge (qtfb path can report
+                    // slightly out-of-bounds x/y) must never emit a
+                    // coordinate outside that range in the /turn request.
+                    let px = round4((x as f64 / SCREEN_W as f64).clamp(0.0, 1.0));
+                    let py = round4((y as f64 / SCREEN_H as f64).clamp(0.0, 1.0));
                     let pressure = round4((((r - 2) as f32 / 3.0).clamp(0.0, 1.0)) as f64);
                     serde_json::json!([px, py, pressure, t])
                 })
@@ -148,7 +153,11 @@ mod tests {
 
     #[test]
     fn request_json_matches_spec_shape() {
-        let strokes = vec![vec![(810, 1080, 3, 0u32), (972, 1080, 4, 12)]];
+        // Third point is a raw pen sample past the screen edge (e.g. a qtfb
+        // report slightly out of bounds) — its normalized x/y must clamp to
+        // 1.0, exactly like an out-of-range pressure already clamps.
+        let strokes =
+            vec![vec![(810, 1080, 3, 0u32), (972, 1080, 4, 12), (99_999, 99_999, 3, 20)]];
         let m = TurnRequestMeta {
             turn_id: "t-1",
             trigger: "pen_idle",
@@ -181,6 +190,10 @@ mod tests {
 
         let p1 = &v["new_strokes"][0][1];
         assert_eq!(p1[3], 12, "t passes through unchanged");
+
+        let p2 = &v["new_strokes"][0][2];
+        assert_eq!(p2[0].as_f64().unwrap(), 1.0, "x clamps to 1.0 past the screen edge: {p2:?}");
+        assert_eq!(p2[1].as_f64().unwrap(), 1.0, "y clamps to 1.0 past the screen edge: {p2:?}");
     }
 
     #[test]

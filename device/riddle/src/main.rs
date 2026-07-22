@@ -426,6 +426,31 @@ fn turn_the_page(
     *page_id = unix_secs();
 }
 
+/// Gate for `turn_the_page`, called from both completion sites (legacy
+/// Replying and CardTurn/DrawingCards) once `page_full` says a fresh sheet is
+/// due. A child may keep drawing during Thinking/CardTurn/DrawingCards
+/// (co-drawing is intended, spec's premise for those states not locking the
+/// page) — those new strokes land past `committed_strokes`. Turning the page
+/// right now would run `user_ink.clear()` and silently discard that
+/// un-answered ink (spec §24: "孩子的作品神圣"). So: only turn the page when
+/// there is no new ink since the last commit; otherwise defer — page_full
+/// gets recomputed at the next commit, so the turn simply happens after the
+/// next response once the child pauses. Never drops ink, just postpones the
+/// sheet change.
+fn maybe_turn_the_page(
+    surf: &mut Surface,
+    disp: &display::Display,
+    user_ink: &mut ink::Ink,
+    committed_strokes: &mut usize,
+    page_id: &mut u64,
+) {
+    if user_ink.stroke_list().len() == *committed_strokes {
+        turn_the_page(surf, disp, user_ink, committed_strokes, page_id);
+    } else {
+        eprintln!("riddle: page turn deferred (child still drawing)");
+    }
+}
+
 /// What the diary sends alongside the page: its memory of recent turns and
 /// the catalog the oracle picks conjured pages from. Empty when memory is off.
 fn build_ctx(store: &Option<memory::MemoryStore>) -> oracle::TurnContext {
@@ -1036,7 +1061,13 @@ fn run() -> std::io::Result<()> {
                             // sets `turn_failed` — either way an aborted
                             // turn's ink is left untouched, same as memory.
                             if page_full {
-                                turn_the_page(&mut surf, &disp, &mut user_ink, &mut committed_strokes, &mut page_id);
+                                maybe_turn_the_page(
+                                    &mut surf,
+                                    &disp,
+                                    &mut user_ink,
+                                    &mut committed_strokes,
+                                    &mut page_id,
+                                );
                             }
                         }
                         turn_strokes = Vec::new();
@@ -1076,9 +1107,15 @@ fn run() -> std::io::Result<()> {
                     // as the reply gist for catalog/recall — the cards
                     // themselves aren't re-derivable from a Card later, but
                     // the words said about them are enough to find the turn
-                    // again.
-                    if let Some(ref mut s) = store {
-                        s.append(turn_id, "", &resp.spoken_text, &turn_strokes);
+                    // again. Gated on a non-empty reply, matching the legacy
+                    // Replying path (`!turn_reply.is_empty()`): a blank
+                    // spoken_text would otherwise leave an empty "(reply: )"
+                    // catalog gist. Strokes-only turns simply aren't
+                    // cataloged, same as legacy.
+                    if !resp.spoken_text.is_empty() {
+                        if let Some(ref mut s) = store {
+                            s.append(turn_id, "", &resp.spoken_text, &turn_strokes);
+                        }
                     }
                     turn_strokes = Vec::new();
                     if plans.is_empty() {
@@ -1158,7 +1195,13 @@ fn run() -> std::io::Result<()> {
                         // Every card is drawn: same page-turn action as a
                         // finished reply (Task 11), gated the same way.
                         if page_full {
-                            turn_the_page(&mut surf, &disp, &mut user_ink, &mut committed_strokes, &mut page_id);
+                            maybe_turn_the_page(
+                                &mut surf,
+                                &disp,
+                                &mut user_ink,
+                                &mut committed_strokes,
+                                &mut page_id,
+                            );
                         }
                         State::Listening { last_pen: None }
                     } else {
