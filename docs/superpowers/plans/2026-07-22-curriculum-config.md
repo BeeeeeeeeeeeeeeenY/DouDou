@@ -2044,6 +2044,15 @@ git commit -m "docs(server): curriculum usage and acceptance checklist"
 
 ---
 
+## 实施决策记录（后端批次 Task 1-6 执行后追加，供二期与前端批次参考）
+
+1. **recap 取材范围**：`latest_recap` 只取 `completed/partial` 的 run，**不含 `skipped`**。spec §8 原文「取上一条非 abandoned 的 run」字面上含 skipped；实施取更优教学语义（几乎未参与的课不值得作为「上次课回顾」喂给模型）。如产品负责人倾向 spec 字面义，改一行过滤条件即可。
+2. **`turns.lesson_run_id` 为普通 Integer 列而非外键**：SQLite `ALTER TABLE ADD COLUMN` 不能带 FK 约束，且本列为可空的弱关联（关联 run 删除后允许悬空，由应用层清理）。属有意为之。
+3. **打标失败兜底**（终审补强）：打标 JSON 损坏时，run 以 `close_run_malformed` 关闭——`status=abandoned`、`raw_report={"_raw": 原文}`、作品照常挂靠；标记文本仍绝不进入回复/TTS。
+4. **作品挂靠触发点**：`close_run_with_report`（正常收尾）与 `end_lesson_run`（家长手动结束）都挂靠；`start_lesson_run` 的遗留 run 清扫**不**挂靠（跨天窗口会误挂无关涂鸦）。
+5. **标记剥离下沉引擎**：`⟦lesson_report⟧` 的剥离在 `TurnRunner` 持久化之前完成（非计划原文的路由器层剥离），使「标记绝不落库」成为绝对不变量；`TurnRunner` 暴露 `lesson_report`/`lesson_report_raw` 给路由器。
+6. **搁置项（前端批次时顺手处理）**：admin_turns 接口暴露 `lesson_run_id`；`artifact_images` 按 `artifact_turn_ids` 保序；课程/课时级联删除时清理 turns 的悬空 `lesson_run_id`；`update_curriculum` 禁止把 slug 置空。
+
 ## Self-Review 结论（已按此修订）
 
 1. **Spec 覆盖**：§8 三表+turns 加列 → Task 1；§6.3 打标协议/兜底 → Task 2/6；§6.2 触发形态（生效互斥、指针、自动推进、手动修正）→ Task 3/6；§5 八课详案 → Task 4 种子；§6.1 软脚本注入与 §4 复习闭环 → Task 2/5/6；§7 小结卡与家长修正 → Task 3/6/7；§6.5 平板夸奖规则 → Task 4 常量 + Task 7 提示块 + Task 9 README；§8 时间窗挂靠 → Task 2 `attach_artifacts`。spec §8 的 `memory_tags` 一期恒空——Task 1 只建列，无任务写入，符合挂载点定位。
