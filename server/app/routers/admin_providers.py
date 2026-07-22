@@ -86,6 +86,6 @@ def test_provider(pid: int, db: Session = Depends(get_db)):
                     "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
         models = [m.get("id", "") for m in resp.json().get("data", [])]
         return {"ok": True, "latency_ms": latency, "models": models, "error": ""}
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as e:
         latency = int((time.monotonic() - t0) * 1000)
         return {"ok": False, "latency_ms": latency, "models": [], "error": str(e)}

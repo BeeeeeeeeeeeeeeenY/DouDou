@@ -43,3 +43,13 @@ def test_connectivity_failure(client):
     respx.get("https://api.test/v1/models").mock(return_value=httpx.Response(401, text="denied"))
     r = client.post(f"/api/admin/providers/{p['id']}/test").json()
     assert r["ok"] is False and "401" in r["error"]
+
+
+@respx.mock
+def test_connectivity_non_json_200(client):
+    p = make_provider(client)
+    respx.get("https://api.test/v1/models").mock(
+        return_value=httpx.Response(200, text="<html>totally not json</html>")
+    )
+    r = client.post(f"/api/admin/providers/{p['id']}/test").json()
+    assert r["ok"] is False and r["models"] == [] and r["error"]
