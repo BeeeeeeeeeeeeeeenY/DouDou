@@ -37,6 +37,7 @@ async def weather_line() -> str:
         line = (
             f"今天{WEATHER_CITY}天气：{desc}，气温 {round(day['temperature_2m_min'][0])}"
             f"~{round(day['temperature_2m_max'][0])} 度，现在 {round(d['current']['temperature_2m'])} 度。"
+            "仅在孩子问到天气或计划外出时才提，不要主动播报。"
         )
         _cache.update(ts=now, line=line)
         return line
