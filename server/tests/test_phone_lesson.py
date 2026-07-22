@@ -161,3 +161,41 @@ def test_voice_turn_with_closed_run_falls_back_to_chat(client, db):
     assert j["lesson_report"] is None
     sent = json.loads(chat.calls[0].request.content)
     assert "今天的课" not in sent["messages"][0]["content"]  # 不注入课时脚本
+
+
+@respx.mock
+def test_voice_turn_malformed_report_abandons_run(client, db):
+    setup_course(client)
+    run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
+    respx.post("https://up.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "上完啦"})
+    )
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=sse_reply("收尾啦 ⟦lesson_report⟧{oops"))
+    )
+    respx.post("https://up.test/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"MP3")
+    )
+    j = client.post(
+        "/api/phone/voice-turn",
+        files={"audio": ("a.webm", b"x", "audio/webm")},
+        data={"history": "[]", "lesson_run_id": str(run_id)},
+    ).json()
+    assert j["reply_text"] == "收尾啦" and j["lesson_report"] is None
+    run = db.get(models.LessonRun, run_id)
+    assert run.status == "abandoned"
+    assert run.raw_report == {"_raw": "{oops"}
+
+
+def test_end_run_attaches_artifacts(client, db):
+    setup_course(client)
+    run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
+    tablet = models.Turn(source="tablet", input_image_path="images/w.png")
+    db.add(tablet)
+    db.commit()
+    client.post(f"/api/phone/lesson-runs/{run_id}/end")
+    db.expire_all()
+    run = db.get(models.LessonRun, run_id)
+    assert run.status == "abandoned"
+    assert run.artifact_turn_ids == [tablet.id]
+    assert db.get(models.Turn, tablet.id).lesson_run_id == run_id

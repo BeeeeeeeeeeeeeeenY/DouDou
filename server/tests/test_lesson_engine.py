@@ -125,3 +125,35 @@ def test_last_lesson_completion_clears_pointer(db):
     db.commit()
     close_run_with_report(db, run, {"status": "completed"}, "")
     assert db.get(models.Curriculum, cur.id).current_lesson_id is None
+
+
+def test_close_run_malformed_preserves_raw_and_attaches(db):
+    cur, l1, _ = _seed_minimal(db)
+    run = models.LessonRun(lesson_id=l1.id)
+    db.add(run)
+    db.commit()
+    tablet = models.Turn(source="tablet")
+    db.add(tablet)
+    db.commit()
+    from app.engine.lesson import close_run_malformed
+    close_run_malformed(db, run, "{oops")
+    assert run.status == "abandoned" and run.ended_at is not None
+    assert run.raw_report == {"_raw": "{oops"}
+    assert run.artifact_turn_ids == [tablet.id]
+
+
+def test_attach_artifacts_excludes_after_window(db):
+    _, l1, _ = _seed_minimal(db)
+    from app.engine.lesson import attach_artifacts
+    from app.models import utcnow
+    run = models.LessonRun(lesson_id=l1.id)
+    db.add(run)
+    db.commit()
+    run.ended_at = utcnow()
+    db.commit()
+    late = models.Turn(source="tablet")  # ts 晚于 ended_at
+    db.add(late)
+    db.commit()
+    attach_artifacts(db, run)
+    assert run.artifact_turn_ids in (None, [])
+    assert db.get(models.Turn, late.id).lesson_run_id is None

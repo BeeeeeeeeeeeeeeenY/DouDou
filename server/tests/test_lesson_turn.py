@@ -68,3 +68,22 @@ async def test_runner_strips_lesson_report_before_persist(app, db):
                                     "highlights": "h", "parent_tip": "p"}
     turn = db.query(models.Turn).one()
     assert "lesson_report" not in turn.reply_text  # 引擎落库即干净，无过渡窗口
+
+
+@respx.mock
+async def test_runner_marker_and_transcript_mark_coexist(app, db):
+    _setup_profile(db)
+    import json as _json
+    content = '真棒！\n⟦lesson_report⟧{"lesson_id":"x","status":"completed","highlights":"h","parent_tip":"p"}\n⁂孩子写了圆'
+    delta = _json.dumps({"choices": [{"delta": {"content": content}}]}, ensure_ascii=False)
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=f"data: {delta}\n\ndata: [DONE]\n\n")
+    )
+    runner = TurnRunner(app.state.sessionmaker, app.state.data_dir,
+                        TurnInput(source="phone", text="收尾"))
+    [_ async for _ in runner.stream()]
+    assert runner.reply_text == "真棒！"
+    assert runner.lesson_report["status"] == "completed"
+    assert runner.transcript == "孩子写了圆"
+    turn = db.query(models.Turn).one()
+    assert "lesson_report" not in turn.reply_text and "⁂" not in turn.reply_text

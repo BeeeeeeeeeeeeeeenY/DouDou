@@ -104,3 +104,12 @@ def close_run_with_report(db, run: LessonRun, report: dict, raw: str) -> None:
     if run.status == "completed":
         advance_pointer(db, run)
     db.commit()
+
+
+def close_run_malformed(db, run: LessonRun, raw: str) -> None:
+    """打标 JSON 解析失败的兜底（spec §6.3）：保留原文、按未收尾关闭，作品照常挂靠。"""
+    run.raw_report = {"_raw": raw}
+    run.status = "abandoned"
+    run.ended_at = utcnow()
+    attach_artifacts(db, run)
+    db.commit()

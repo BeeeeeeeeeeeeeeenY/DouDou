@@ -6,7 +6,13 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.engine.errors import ConfigError
-from app.engine.lesson import close_run_with_report, latest_recap, render_lesson_script
+from app.engine.lesson import (
+    attach_artifacts,
+    close_run_malformed,
+    close_run_with_report,
+    latest_recap,
+    render_lesson_script,
+)
 from app.engine.tts import synthesize
 from app.engine.turn import TurnInput, TurnRunner
 from app.engine.upstream import UpstreamError
@@ -45,6 +51,7 @@ def start_lesson_run(db: Session = Depends(get_db)):
     for stale in db.query(LessonRun).filter(LessonRun.status == "running").all():
         stale.status = "abandoned"
         stale.ended_at = utcnow()
+        # 遗留 running 仅置 abandoned、不挂靠作品：跨天的失联窗口会误挂无关涂鸦
     run = LessonRun(lesson_id=lesson.id)
     db.add(run)
     db.commit()
@@ -59,6 +66,7 @@ def end_lesson_run(run_id: int, db: Session = Depends(get_db)):
     if run.status == "running":
         run.status = "abandoned"
         run.ended_at = utcnow()
+        attach_artifacts(db, run)
         db.commit()
     return {"ok": True, "status": run.status}
 
@@ -113,12 +121,15 @@ async def voice_turn(
     lesson_report_out = None
 
     with request.app.state.sessionmaker() as db:  # type: Session
-        if report is not None and active_run_id is not None:
+        if active_run_id is not None:
             run = db.get(LessonRun, active_run_id)
             if run is not None and run.status == "running":
-                close_run_with_report(db, run, report, raw)
-                lesson_report_out = {"status": run.status, "highlights": run.highlights,
-                                     "parent_tip": run.parent_tip}
+                if report is not None:
+                    close_run_with_report(db, run, report, raw)
+                    lesson_report_out = {"status": run.status, "highlights": run.highlights,
+                                         "parent_tip": run.parent_tip}
+                elif raw:
+                    close_run_malformed(db, run, raw)  # 坏 JSON 兜底：保留原文、按未收尾关闭
         try:
             _, tts_cfg = load_voice_config(db)
             audio_bytes = await synthesize(tts_cfg["base_url"], tts_cfg["api_key"],
@@ -132,7 +143,6 @@ async def voice_turn(
             db.commit()
             audio_url = f"/api/files/{rel}"
         except (ConfigError, UpstreamError):
-            db.commit()  # 打标/剥离结果仍要落库
             audio_url = ""  # TTS 失败不阻塞文字回复
 
     return {"turn_id": runner.turn_id, "transcript": runner.transcript,
