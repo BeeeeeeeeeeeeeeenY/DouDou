@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator
 
 from app.engine.errors import ConfigError
+from app.engine.lesson import parse_lesson_report
 from app.engine.prompt import assemble_system_prompt
 from app.engine.transcript import split_transcript
 from app.engine.upstream import UpstreamError, build_chat_body, stream_chat
@@ -35,6 +36,8 @@ class TurnRunner:
         self.transcript = ""
         self.system_prompt = ""
         self.input_text = tin.text
+        self.lesson_report: dict | None = None
+        self.lesson_report_raw = ""
 
     def _save_file(self, sub: str, ext: str, data: bytes) -> str:
         rel = f"{sub}/{uuid.uuid4().hex}.{ext}"
@@ -106,7 +109,10 @@ class TurnRunner:
                 yield delta
 
             visible, post = split_transcript("".join(full))
-            self.reply_text = visible
+            clean, report, raw = parse_lesson_report(visible)
+            self.reply_text = clean  # ⟦lesson_report⟧ 标记绝不落库、不外显
+            self.lesson_report = report
+            self.lesson_report_raw = raw
             if post:  # 语音/测试轮无 ⁂ 时保留 STT 转写
                 self.transcript = post
             turn.reply_text, turn.transcript = self.reply_text, self.transcript

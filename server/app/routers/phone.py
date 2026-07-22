@@ -6,8 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.engine.errors import ConfigError
-from app.engine.lesson import (close_run_with_report, latest_recap,
-                               parse_lesson_report, render_lesson_script)
+from app.engine.lesson import close_run_with_report, latest_recap, render_lesson_script
 from app.engine.tts import synthesize
 from app.engine.turn import TurnInput, TurnRunner
 from app.engine.upstream import UpstreamError
@@ -107,14 +106,13 @@ async def voice_turn(
     except UpstreamError as e:
         raise HTTPException(502, f"模型服务出错（{e.status_code}）")
 
-    # 打标剥离：无论是否课程模式，标记行都不外泄、不进 TTS
-    clean_text, report, raw = parse_lesson_report(runner.reply_text)
+    # 打标剥离已在引擎内完成：runner.reply_text 落库前即已干净
+    clean_text = runner.reply_text  # 引擎已剥离 ⟦lesson_report⟧
+    report = runner.lesson_report
+    raw = runner.lesson_report_raw
     lesson_report_out = None
 
     with request.app.state.sessionmaker() as db:  # type: Session
-        turn = db.get(Turn, runner.turn_id)
-        if turn is not None and clean_text != runner.reply_text:
-            turn.reply_text = clean_text
         if report is not None and active_run_id is not None:
             run = db.get(LessonRun, active_run_id)
             if run is not None and run.status == "running":
