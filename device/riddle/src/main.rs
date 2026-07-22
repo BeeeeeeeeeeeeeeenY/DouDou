@@ -12,6 +12,7 @@ mod display;
 mod fb;
 mod help;
 mod ink;
+mod layout;
 mod memory;
 mod oracle;
 mod pen;
