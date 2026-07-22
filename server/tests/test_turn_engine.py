@@ -13,6 +13,11 @@ SSE = (
     "data: [DONE]\n\n"
 )
 
+NO_MARK_SSE = (
+    'data: {"choices":[{"delta":{"content":"我们来数星星呀。"}}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
 
 def setup_active_profile(db):
     p = models.Provider(name="up", base_url="https://up.test/v1", api_key="sk")
@@ -97,3 +102,43 @@ async def test_upstream_error_logged(app, db):
             pass
     turn = db.query(models.Turn).one()
     assert turn.status == "error" and "rate limited" in turn.error
+
+
+@respx.mock
+async def test_voice_turn_keeps_stt_transcript_without_mark(app, db):
+    setup_active_profile(db)
+    p = db.query(models.Provider).first()
+    db.get(models.VoiceSettings, 1).stt_provider_id = p.id
+    db.get(models.VoiceSettings, 1).stt_model = "whisper-1"
+    vs = db.get(models.VoiceSettings, 1)
+    vs.tts_provider_id, vs.tts_model = p.id, "tts-1"
+    db.commit()
+    respx.post("https://up.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "天上有几颗星星"})
+    )
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=NO_MARK_SSE)
+    )
+    runner = TurnRunner(app.state.sessionmaker, app.state.data_dir,
+                        TurnInput(source="phone", audio=b"AUDIO", use_voice_hint=True))
+    [_ async for _ in runner.stream()]
+    assert runner.transcript == "天上有几颗星星"
+    turn = db.query(models.Turn).one()
+    assert turn.transcript == "天上有几颗星星"
+    assert turn.input_text == "天上有几颗星星"
+    assert turn.input_audio_path
+
+
+@respx.mock
+async def test_abandoned_stream_logged_as_error(app, db):
+    setup_active_profile(db)
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=SSE)
+    )
+    runner = TurnRunner(app.state.sessionmaker, app.state.data_dir,
+                        TurnInput(source="test", text="hi"))
+    agen = runner.stream()
+    await anext(agen)      # consume one delta
+    await agen.aclose()    # abandon mid-stream
+    turn = db.query(models.Turn).one()
+    assert turn.status == "error" and "aborted" in turn.error

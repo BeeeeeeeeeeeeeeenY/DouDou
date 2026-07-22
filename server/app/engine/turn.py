@@ -68,6 +68,7 @@ class TurnRunner:
                     self.input_text = heard
                     turn.input_text = heard
                     turn.transcript = heard
+                    self.transcript = heard
 
                 self.system_prompt = assemble_system_prompt(
                     profile.persona_text,
@@ -110,6 +111,10 @@ class TurnRunner:
             raise
         except UpstreamError as e:
             turn.status, turn.error = "error", f"{e.status_code}: {e.detail[:500]}"
+            raise
+        except BaseException as e:  # GeneratorExit / raw transport errors etc.
+            turn.status, turn.error = "error", f"aborted: {type(e).__name__}: {e}"[:500]
+            turn.reply_text = "".join(full)
             raise
         finally:
             turn.latency_ms = int((time.monotonic() - t0) * 1000)
