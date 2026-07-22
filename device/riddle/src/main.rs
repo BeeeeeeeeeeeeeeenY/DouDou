@@ -842,13 +842,14 @@ fn conjure(
         all.push(mapped);
     }
 
-    // The writer's own hand, exactly as it was penned.
+    // The writer's own hand, exactly as it was penned (replay ignores t).
     for stroke in &strokes {
-        for &(x, y, r) in stroke {
+        let mapped: Vec<(i32, i32, i32)> = stroke.iter().map(|&(x, y, r, _)| (x, y, r)).collect();
+        for &(x, y, r) in &mapped {
             region.add(x, y, r + 2);
             ink_bottom = ink_bottom.max(y);
         }
-        all.push(stroke.clone());
+        all.push(mapped);
     }
 
     // Tom's old reply, below.
