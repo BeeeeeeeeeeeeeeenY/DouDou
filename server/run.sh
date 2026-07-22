@@ -19,4 +19,13 @@ else
   echo "未发现 certs/，仅启动 http。手机页需 https（麦克风权限），配置方法见 README。"
 fi
 echo "http（平板+管理）: http://$(ipconfig getifaddr en0 2>/dev/null || echo localhost):8787/admin"
+
+sleep 2
+for pid in "${PIDS[@]}"; do
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "启动失败：端口被占用或初始化出错，见上方日志"
+    exit 1
+  fi
+done
+
 wait

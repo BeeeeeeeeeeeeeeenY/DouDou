@@ -93,6 +93,8 @@ riddle 的 HTTP 后端发送标准 chat-completions 请求：
 - **参数以 profile 为准**：上游 provider、模型、temperature、max_tokens、reasoning_effort
   全用后台配置，忽略设备请求里的对应值。请求体中 `max_tokens` /
   `max_completion_tokens` 两种字段名都接受（riddle 收到 400 会换名重试，门面直接兼容即可）。
+  服务器调上游时先发 `max_tokens`，若上游 400 且报文含 `max_completion_tokens`
+  则换名重试一次（与 riddle 原直连行为一致）。
 - **其余透传**：history 与 user 内容（文字+图片）原样转发；上游 SSE 按 OpenAI chunk
   格式转发回平板（riddle 现有解析器直接兼容）。
 - 来源标记为 `tablet` 落库；`⁂` 后的转写内容存入 TurnRecord.transcript，

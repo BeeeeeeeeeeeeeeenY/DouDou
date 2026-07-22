@@ -58,6 +58,25 @@ async def test_stream_chat_error_raises():
 
 
 @respx.mock
+async def test_stream_chat_retries_with_max_completion_tokens():
+    """reasoning 模型拒绝 max_tokens：上游 400 且报文含 max_completion_tokens 时换名重试一次。"""
+    route = respx.post("https://api.test/v1/chat/completions").mock(
+        side_effect=[
+            httpx.Response(400, text='{"error":"use max_completion_tokens"}'),
+            httpx.Response(200, text=SSE),
+        ]
+    )
+    chunks = [c async for c in stream_chat("https://api.test/v1", "sk-x", build_chat_body("m", []))]
+    assert chunks == ["你好", "，小朋友"]
+    assert len(route.calls) == 2
+
+    import json
+    retried_body = json.loads(route.calls[1].request.content)
+    assert "max_completion_tokens" in retried_body
+    assert "max_tokens" not in retried_body
+
+
+@respx.mock
 async def test_stream_chat_transport_error_wrapped():
     respx.post("https://api.test/v1/chat/completions").mock(
         side_effect=httpx.ConnectError("boom")

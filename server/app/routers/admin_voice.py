@@ -7,6 +7,7 @@ from app.db import get_db
 from app.engine.errors import ConfigError
 from app.engine.stt import transcribe
 from app.engine.tts import synthesize
+from app.engine.upstream import UpstreamError
 from app.models import Provider, VoiceSettings
 
 router = APIRouter(prefix="/api/admin")
@@ -64,8 +65,11 @@ async def stt_test(audio: UploadFile, db: Session = Depends(get_db)):
     except ConfigError as e:
         raise HTTPException(400, e.message)
     data = await audio.read()
-    text = await transcribe(stt_cfg["base_url"], stt_cfg["api_key"], stt_cfg["model"],
-                            data, audio.filename or "audio.webm")
+    try:
+        text = await transcribe(stt_cfg["base_url"], stt_cfg["api_key"], stt_cfg["model"],
+                                data, audio.filename or "audio.webm")
+    except UpstreamError as e:
+        raise HTTPException(502, f"语音服务出错（{e.status_code}）：{e.detail[:200]}")
     return {"text": text}
 
 
@@ -79,6 +83,9 @@ async def tts_test(body: TtsIn, db: Session = Depends(get_db)):
         _, tts_cfg = load_voice_config(db)
     except ConfigError as e:
         raise HTTPException(400, e.message)
-    audio = await synthesize(tts_cfg["base_url"], tts_cfg["api_key"], tts_cfg["model"],
-                             tts_cfg["voice"], body.text, tts_cfg["speed"])
+    try:
+        audio = await synthesize(tts_cfg["base_url"], tts_cfg["api_key"], tts_cfg["model"],
+                                 tts_cfg["voice"], body.text, tts_cfg["speed"])
+    except UpstreamError as e:
+        raise HTTPException(502, f"语音服务出错（{e.status_code}）：{e.detail[:200]}")
     return Response(content=audio, media_type="audio/mpeg")

@@ -15,13 +15,15 @@ export default function Phone() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const rec = new MediaRecorder(stream)
+      const mime = rec.mimeType || 'audio/webm'
+      const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm'
       const chunks: Blob[] = []
       rec.ondataavailable = e => chunks.push(e.data)
       rec.onstop = async () => {
         stream.getTracks().forEach(t => t.stop())
         setState('thinking')
         const fd = new FormData()
-        fd.append('audio', new Blob(chunks, { type: 'audio/webm' }), 'say.webm')
+        fd.append('audio', new Blob(chunks, { type: mime }), `say.${ext}`)
         fd.append('history', JSON.stringify(historyRef.current.slice(-5)))
         try {
           const resp = await fetch('/api/phone/voice-turn', { method: 'POST', body: fd })

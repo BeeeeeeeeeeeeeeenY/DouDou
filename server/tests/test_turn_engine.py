@@ -120,13 +120,15 @@ async def test_voice_turn_keeps_stt_transcript_without_mark(app, db):
         return_value=httpx.Response(200, text=NO_MARK_SSE)
     )
     runner = TurnRunner(app.state.sessionmaker, app.state.data_dir,
-                        TurnInput(source="phone", audio=b"AUDIO", use_voice_hint=True))
+                        TurnInput(source="phone", audio=b"AUDIO", audio_filename="say.m4a",
+                                  use_voice_hint=True))
     [_ async for _ in runner.stream()]
     assert runner.transcript == "天上有几颗星星"
     turn = db.query(models.Turn).one()
     assert turn.transcript == "天上有几颗星星"
     assert turn.input_text == "天上有几颗星星"
     assert turn.input_audio_path
+    assert turn.input_audio_path.endswith(".m4a")  # 存盘扩展名随上传文件名，而非硬编码 webm
 
 
 @respx.mock
