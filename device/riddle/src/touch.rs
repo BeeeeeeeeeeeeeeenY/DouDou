@@ -67,6 +67,14 @@ impl QuitArm {
     }
 }
 
+/// Check if five-finger hold should fire quit. Counts active slots and updates arm.
+/// Extracted for testability — called both from finish_frame (on touch events) and
+/// drain's post-read tick (every ~2ms poll) so stationary holds advance the timer.
+fn tick_quit(slots: &[Slot; MAX_SLOTS], arm: &mut QuitArm, now: Instant) -> bool {
+    let count = slots.iter().filter(|s| s.active).count();
+    arm.update(count, now)
+}
+
 #[derive(Clone, Copy, Default)]
 struct Slot {
     active: bool,
@@ -164,6 +172,11 @@ impl TouchDevice {
                 }
             }
         }
+        // Tick the quit timer even without new touch events. The main loop's
+        // ~2ms drain_check_quit() poll advances the hold timer for stationary presses.
+        if tick_quit(&self.slots, &mut self.quit_arm, Instant::now()) {
+            out.push(Gesture::Quit);
+        }
         out
     }
 
@@ -171,7 +184,7 @@ impl TouchDevice {
         let active: Vec<Slot> = self.slots.iter().copied().filter(|s| s.active).collect();
         let count = active.len();
         self.max_fingers = self.max_fingers.max(count);
-        if self.quit_arm.update(count, Instant::now()) {
+        if tick_quit(&self.slots, &mut self.quit_arm, Instant::now()) {
             out.push(Gesture::Quit);
         }
 
@@ -253,5 +266,21 @@ mod tests {
     fn zero_hold_fires_immediately_for_legacy_mode() {
         let mut arm = QuitArm::new(Duration::ZERO);
         assert!(arm.update(5, Instant::now()));
+    }
+
+    #[test]
+    fn stationary_hold_fires_via_tick_without_new_frames() {
+        let mut slots = [Slot::default(); MAX_SLOTS];
+        for s in slots.iter_mut().take(5) {
+            s.active = true;
+        }
+        let mut arm = QuitArm::new(Duration::from_secs(3));
+        let t0 = Instant::now();
+        assert!(!tick_quit(&slots, &mut arm, t0));
+        assert!(tick_quit(&slots, &mut arm, t0 + Duration::from_millis(3100)));
+        assert!(
+            !tick_quit(&slots, &mut arm, t0 + Duration::from_millis(3200)),
+            "fired latch holds"
+        );
     }
 }
