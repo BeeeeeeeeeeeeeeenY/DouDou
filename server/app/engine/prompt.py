@@ -21,13 +21,16 @@ def split_protocol_suffix(device_system: str) -> tuple[str, str]:
 
 
 def assemble_system_prompt(
-    persona: str, *, voice_hint: str = "", time_line: str = "", protocol_suffix: str = ""
+    persona: str, *, voice_hint: str = "", time_line: str = "",
+    lesson_context: str = "", protocol_suffix: str = ""
 ) -> str:
     out = persona.strip()
     if voice_hint.strip():
         out += "\n\n" + voice_hint.strip()
     if time_line:
         out += "\n\n" + time_line
+    if lesson_context.strip():
+        out += "\n\n" + lesson_context.strip()
     if protocol_suffix:
         out += protocol_suffix  # 后缀自带 \n\n 前导
     return out

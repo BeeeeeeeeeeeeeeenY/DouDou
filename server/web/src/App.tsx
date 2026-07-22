@@ -1,5 +1,6 @@
 import { Layout, Menu } from 'antd'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import Curricula from './pages/Curricula'
 import Phone from './pages/Phone'
 import Profiles from './pages/Profiles'
 import Providers from './pages/Providers'
@@ -10,6 +11,7 @@ import VoiceSettings from './pages/VoiceSettings'
 const MENU = [
   { key: '/admin/providers', label: '模型配置' },
   { key: '/admin/profiles', label: '人设 Profile' },
+  { key: '/admin/curricula', label: '课程' },
   { key: '/admin/test', label: '测试台' },
   { key: '/admin/voice', label: '语音配置' },
   { key: '/admin/turns', label: '对话记录' },
@@ -32,6 +34,7 @@ function AdminShell() {
         <Routes>
           <Route path="providers" element={<Providers />} />
           <Route path="profiles" element={<Profiles />} />
+          <Route path="curricula" element={<Curricula />} />
           <Route path="test" element={<TestBench />} />
           <Route path="voice" element={<VoiceSettings />} />
           <Route path="turns" element={<Turns />} />

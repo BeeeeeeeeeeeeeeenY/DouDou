@@ -6,6 +6,7 @@ from typing import AsyncIterator
 
 from app.engine.errors import ConfigError
 from app.engine.ambient import weather_line
+from app.engine.lesson import parse_lesson_report
 from app.engine.prompt import assemble_system_prompt, time_context
 from app.engine.transcript import split_transcript
 from app.engine.upstream import UpstreamError, build_chat_body, stream_chat
@@ -31,6 +32,8 @@ class TurnInput:
     history: list[dict] = field(default_factory=list)
     device_protocol_suffix: str = ""
     use_voice_hint: bool = False
+    lesson_context: str = ""
+    lesson_run_id: int | None = None
 
 
 class TurnRunner:
@@ -43,6 +46,8 @@ class TurnRunner:
         self.transcript = ""
         self.system_prompt = ""
         self.input_text = tin.text
+        self.lesson_report: dict | None = None
+        self.lesson_report_raw = ""
 
     def _save_file(self, sub: str, ext: str, data: bytes) -> str:
         rel = f"{sub}/{uuid.uuid4().hex}.{ext}"
@@ -55,6 +60,7 @@ class TurnRunner:
         t0 = time.monotonic()
         full: list[str] = []
         turn = Turn(source=tin.source, input_text=tin.text)
+        turn.lesson_run_id = tin.lesson_run_id
         if tin.image_png:
             turn.input_image_path = self._save_file("images", "png", tin.image_png)
         if tin.audio:
@@ -86,6 +92,7 @@ class TurnRunner:
                     profile.persona_text,
                     voice_hint=profile.voice_hint if tin.use_voice_hint else "",
                     time_line=ambient,
+                    lesson_context=tin.lesson_context,
                     protocol_suffix=tin.device_protocol_suffix,
                 )
                 turn.system_prompt = self.system_prompt
@@ -118,7 +125,10 @@ class TurnRunner:
                 yield delta
 
             visible, post = split_transcript("".join(full))
-            self.reply_text = visible
+            clean, report, raw = parse_lesson_report(visible)
+            self.reply_text = clean  # ⟦lesson_report⟧ 标记绝不落库、不外显
+            self.lesson_report = report
+            self.lesson_report_raw = raw
             if post:  # 语音/测试轮无 ⁂ 时保留 STT 转写
                 self.transcript = post
             turn.reply_text, turn.transcript = self.reply_text, self.transcript

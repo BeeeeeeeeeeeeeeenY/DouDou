@@ -49,3 +49,14 @@ mkcert -cert-file certs/cert.pem -key-file certs/key.pem "$(ipconfig getifaddr e
 ```sh
 cd server && uv run pytest
 ```
+
+## 课程（形状小画家）
+
+1. 后台「课程」页点「一键导入示范课程」，再点「设为生效」。
+2. 把页面顶部的「平板夸奖规则」复制进 3-4 岁 profile 的人设文本末尾（平板提交轮的手写夸奖靠它）。
+3. 手机页出现「开始上课」按钮：点开始 → 按住说话跟着豆豆走五环节 →
+   孩子画完后在平板上把画发给豆豆（作品会按时间自动挂到本课记录）→
+   课程收尾后手机页出现小结气泡，后台「课程」页可看每课的亮点、在家延伸与作品。
+4. 中途退出：点课程条上的「结束」（记录状态为「未收尾」，家长可在后台修正）。
+
+设计文档：`docs/superpowers/specs/2026-07-22-mini-curriculum-design.md`
