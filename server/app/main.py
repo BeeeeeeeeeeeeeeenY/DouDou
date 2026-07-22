@@ -34,7 +34,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         @app.get("/{path:path}")
         def spa(path: str):
             full = os.path.normpath(os.path.join(dist, path))
-            if full.startswith(dist) and os.path.isfile(full):
+            if full.startswith(dist + os.sep) and os.path.isfile(full):
                 return FileResponse(full)
             return FileResponse(os.path.join(dist, "index.html"))
 
