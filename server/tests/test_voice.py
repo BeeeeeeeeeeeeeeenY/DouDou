@@ -1,0 +1,65 @@
+import httpx
+import pytest
+import respx
+
+from app.engine.errors import ConfigError
+from app.engine.stt import transcribe
+from app.engine.tts import synthesize
+
+
+@respx.mock
+async def test_transcribe_posts_multipart():
+    route = respx.post("https://v.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "你好豆豆"})
+    )
+    text = await transcribe("https://v.test/v1", "sk", "whisper-1", b"AUDIO", "a.webm")
+    assert text == "你好豆豆"
+    assert b"whisper-1" in route.calls[0].request.content
+
+
+@respx.mock
+async def test_synthesize_returns_bytes():
+    respx.post("https://v.test/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"MP3DATA")
+    )
+    audio = await synthesize("https://v.test/v1", "sk", "tts-1", "alloy", "你好", speed=1.2)
+    assert audio == b"MP3DATA"
+
+
+def test_voice_settings_get_put(client):
+    r = client.get("/api/admin/voice-settings").json()
+    assert r["stt_model"] == "" and r["tts_speed"] == 1.0
+
+    p = client.post("/api/admin/providers",
+                    json={"name": "v", "base_url": "https://v.test/v1", "api_key": "sk"}).json()
+    r = client.put("/api/admin/voice-settings", json={
+        "stt_provider_id": p["id"], "stt_model": "whisper-1",
+        "tts_provider_id": p["id"], "tts_model": "tts-1", "tts_voice": "alloy", "tts_speed": 1.1,
+    }).json()
+    assert r["stt_model"] == "whisper-1" and r["tts_voice"] == "alloy"
+
+
+@respx.mock
+def test_stt_and_tts_test_endpoints(client):
+    p = client.post("/api/admin/providers",
+                    json={"name": "v", "base_url": "https://v.test/v1", "api_key": "sk"}).json()
+    client.put("/api/admin/voice-settings", json={
+        "stt_provider_id": p["id"], "stt_model": "whisper-1",
+        "tts_provider_id": p["id"], "tts_model": "tts-1", "tts_voice": "alloy",
+    })
+    respx.post("https://v.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "测到了"})
+    )
+    respx.post("https://v.test/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"MP3")
+    )
+    r = client.post("/api/admin/voice/stt-test", files={"audio": ("a.webm", b"xx", "audio/webm")})
+    assert r.json() == {"text": "测到了"}
+    r = client.post("/api/admin/voice/tts-test", json={"text": "你好"})
+    assert r.content == b"MP3"
+
+
+def test_stt_test_unconfigured_400(client):
+    r = client.post("/api/admin/voice/stt-test", files={"audio": ("a.webm", b"xx", "audio/webm")})
+    assert r.status_code == 400
+    assert "语音配置" in r.json()["detail"]
