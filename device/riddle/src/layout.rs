@@ -43,7 +43,15 @@ impl InkMap {
                 let mut dirty = false;
                 'sample: for sy in 0..5 {
                     for sx in 0..5 {
-                        if surf.luma(x0 + sx * step, y0 + sy * step) < 200 {
+                        // The last col/row of cells overhangs the true page
+                        // edge (1620 % CELL = 20, 2160 % CELL = 10), so a
+                        // raw sample point can land past surf.w/surf.h.
+                        // Clamp explicitly rather than lean on
+                        // Surface::luma's own out-of-range fallback
+                        // (255/white) to define this cell's dirtiness.
+                        let x = (x0 + sx * step).min(surf.w as i32 - 1);
+                        let y = (y0 + sy * step).min(surf.h as i32 - 1);
+                        if surf.luma(x, y) < 200 {
                             dirty = true;
                             break 'sample;
                         }
@@ -240,36 +248,42 @@ fn screen_center(map: &InkMap) -> (i32, i32) {
 /// clear cell. Unlike other places this asks `find_spot` for zero breathing
 /// margin: edge decorations sit flush against the border, and the page edge
 /// is already the boundary — there's no ink there to keep clear of.
+///
+/// Every band's seed sits `EDGE_BAND / 2` px in from the true page edge —
+/// the middle of that band's clear strip — symmetric on all four sides.
+/// The four (mask, seed) pairs are looped over rather than spelled out four
+/// times specifically so they can't drift out of sync with each other: an
+/// earlier version hand-wrote each block and the bottom/right seeds ended up
+/// using a mismatched offset that landed inside their own band's masked-dirty
+/// interior instead of its clear strip.
 fn resolve_margin(map: &InkMap, want_w: i32, want_h: i32) -> Option<(i32, i32)> {
     let (sw, sh) = (map.screen_w as i32, map.screen_h as i32);
     let (cx, cy) = (sw / 2, sh / 2);
+    let half = EDGE_BAND / 2;
 
-    let mut band = map.clone();
-    band.mark_rect(0, EDGE_BAND, sw, sh - EDGE_BAND);
-    if let Some(p) = band.find_spot(want_w, want_h, (cx, 60), 0) {
-        return Some(p);
+    // (rect to mask dirty on the clone, seed point) for each edge band, in
+    // top -> bottom -> left -> right try order.
+    let bands: [((i32, i32, i32, i32), (i32, i32)); 4] = [
+        ((0, EDGE_BAND, sw, sh - EDGE_BAND), (cx, half)),
+        ((0, 0, sw, sh - EDGE_BAND), (cx, sh - half)),
+        ((EDGE_BAND, 0, sw - EDGE_BAND, sh), (half, cy)),
+        ((0, 0, sw - EDGE_BAND, sh), (sw - half, cy)),
+    ];
+
+    for ((mx, my, mw, mh), seed) in bands {
+        let mut band = map.clone();
+        band.mark_rect(mx, my, mw, mh);
+        if let Some(p) = band.find_spot(want_w, want_h, seed, 0) {
+            return Some(p);
+        }
     }
-
-    let mut band = map.clone();
-    band.mark_rect(0, 0, sw, sh - EDGE_BAND);
-    if let Some(p) = band.find_spot(want_w, want_h, (cx, sh - 180), 0) {
-        return Some(p);
-    }
-
-    let mut band = map.clone();
-    band.mark_rect(EDGE_BAND, 0, sw - EDGE_BAND, sh);
-    if let Some(p) = band.find_spot(want_w, want_h, (60, cy), 0) {
-        return Some(p);
-    }
-
-    let mut band = map.clone();
-    band.mark_rect(0, 0, sw - EDGE_BAND, sh);
-    band.find_spot(want_w, want_h, (sw - 180, cy), 0)
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::surface::{PixFmt, BLACK};
 
     /// 手工构造:把给定像素矩形标脏。
     fn map_with(dirty: &[(i32, i32, i32, i32)]) -> InkMap {
@@ -278,6 +292,14 @@ mod tests {
             m.mark_rect(x, y, w, h);
         }
         m
+    }
+
+    /// A real, blank `Surface` at the exact target resolution (1620x2160).
+    fn full_page_surf() -> (Vec<u8>, Surface) {
+        let mut buf = vec![0xFFu8; 1620 * 2160 * 4];
+        let ptr = buf.as_mut_ptr();
+        let s = Surface::new(ptr, buf.len(), 1620, 2160, 1620 * 4, PixFmt::Rgb32);
+        (buf, s)
     }
 
     #[test]
@@ -319,5 +341,48 @@ mod tests {
         let (x, y) = got.expect("margins are free");
         assert!(y <= 120 || y >= 2160 - 220 || x <= 120 || x >= 1620 - 320,
             "({x},{y}) is not in an edge band");
+    }
+
+    #[test]
+    fn margin_resolves_to_bottom_band_when_top_is_also_blocked() {
+        // Same central block as the sibling test, plus the whole top band
+        // blotted out too — resolution must fall through to another band
+        // (top -> bottom -> left -> right), exercising the bottom/left/right
+        // seeds the sibling test never reaches (it's satisfied by top).
+        let mut m = map_with(&[(200, 200, 1200, 1700)]);
+        m.mark_rect(0, 0, 1620, 120);
+        let got = resolve(&m, &crate::cards::Place::Margin, Anchor::None, 200, 100);
+        let (x, y) = got.expect("bottom/left/right margins are still free");
+        assert!(y <= 120 || y >= 2160 - 220 || x <= 120 || x >= 1620 - 320,
+            "({x},{y}) is not in an edge band");
+        if y >= 2160 - 120 {
+            // Actually hugging the true bottom edge (want_h = 100), not
+            // just barely short of the interior mask boundary — this is
+            // exactly what the mismatched seed used to get wrong.
+            assert!(y >= 2160 - 120 - 100, "({x},{y}) doesn't hug the bottom edge");
+        }
+    }
+
+    #[test]
+    fn from_surface_handles_the_overhanging_last_cell() {
+        // 1620 % CELL = 20, 2160 % CELL = 10: the last col/row of cells
+        // overhangs the true page edge, at the exact target resolution.
+        // This 4x4 sliver sits exactly in that last cell's true corner
+        // (pixels x:1616..1620, y:2156..2160) — a spot only the *clamped*
+        // last sample of the cell's 5x5 grid ever reaches (the other 5x5
+        // sample points, both the in-bounds ones and the unclamped
+        // out-of-bounds ones that fall back to luma 255/white, all miss
+        // it). So this specifically fails to register as dirty without the
+        // clamp — not just a "does it panic" smoke test.
+        let (_buf, mut surf) = full_page_surf();
+        surf.fill_rect(1616, 2156, 4, 4, BLACK); // the true bottom-right pixel block
+        let m = InkMap::from_surface(&surf);
+        assert!(m.coverage() > 0.0, "the true corner pixel should register as dirty");
+        if let Some((x, y)) = m.find_spot(50, 50, (1618, 2158), 0) {
+            assert!(
+                x + 50 <= 1616 || x >= 1620 || y + 50 <= 2156 || y >= 2160,
+                "({x},{y}) overlaps the inked corner"
+            );
+        }
     }
 }
