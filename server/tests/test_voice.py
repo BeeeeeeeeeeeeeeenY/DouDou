@@ -130,3 +130,32 @@ def test_provider_voices_non_minimax_empty(client):
                     json={"name": "qwen", "base_url": "https://q.test/v1", "api_key": "sk"}).json()
     r = client.get(f"/api/admin/providers/{p['id']}/voices").json()
     assert r["voices"] == []
+
+
+@respx.mock
+async def test_transcribe_dashscope_chat_asr():
+    route = respx.post("https://x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={
+            "choices": [{"message": {"content": "天上有几颗星星"}}],
+        })
+    )
+    text = await transcribe("https://x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+                            "sk", "qwen3-asr-flash", b"AUDIO", "say.webm")
+    assert text == "天上有几颗星星"
+    import json as _json
+    sent = _json.loads(route.calls[0].request.content)
+    part = sent["messages"][0]["content"][0]
+    assert part["type"] == "input_audio"
+    assert part["input_audio"]["format"] == "webm"
+    assert part["input_audio"]["data"].startswith("data:audio/webm;base64,")
+
+
+@respx.mock
+async def test_transcribe_dashscope_error_mapped():
+    respx.post("https://x.dashscope.test/v1/chat/completions").mock(
+        return_value=httpx.Response(400, text="bad audio")
+    )
+    from app.engine.upstream import UpstreamError
+    with pytest.raises(UpstreamError) as ei:
+        await transcribe("https://x.dashscope.test/v1", "sk", "m", b"A", "a.mp3")
+    assert ei.value.status_code == 400
