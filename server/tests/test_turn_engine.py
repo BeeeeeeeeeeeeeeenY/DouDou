@@ -150,3 +150,48 @@ async def test_abandoned_stream_logged_as_error(app, db):
     await agen.aclose()    # abandon mid-stream
     turn = db.query(models.Turn).one()
     assert turn.status == "error" and "aborted" in turn.error
+
+
+@respx.mock
+async def test_weather_line_injected_and_web_search_flag(app, db):
+    from app.engine import ambient
+    ambient._cache.update(ts=0.0, line="")  # 清缓存
+    respx.get("https://api.open-meteo.com/v1/forecast").mock(
+        return_value=httpx.Response(200, json={
+            "current": {"temperature_2m": 29.3},
+            "daily": {"temperature_2m_max": [31.2], "temperature_2m_min": [26.1],
+                      "weather_code": [80]},
+        })
+    )
+    prof = setup_active_profile(db)
+    db.get(models.Profile, prof.id).web_search = True
+    db.commit()
+    route = respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=SSE)
+    )
+    runner = TurnRunner(app.state.sessionmaker, app.state.data_dir,
+                        TurnInput(source="test", text="今天天气怎么样"))
+    [_ async for _ in runner.stream()]
+    import json
+    body = json.loads(route.calls[0].request.content)
+    assert "今天深圳天气：阵雨，气温 26~31 度，现在 29 度。" in body["messages"][0]["content"]
+    assert body["enable_search"] is True
+    ambient._cache.update(ts=0.0, line="")
+
+
+@respx.mock
+async def test_weather_failure_never_blocks_turn(app, db):
+    from app.engine import ambient
+    ambient._cache.update(ts=0.0, line="")
+    respx.get("https://api.open-meteo.com/v1/forecast").mock(
+        side_effect=httpx.ConnectError("no net")
+    )
+    setup_active_profile(db)
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=SSE)
+    )
+    runner = TurnRunner(app.state.sessionmaker, app.state.data_dir,
+                        TurnInput(source="test", text="hi"))
+    chunks = [c async for c in runner.stream()]
+    assert chunks  # 天气挂了对话照常
+    ambient._cache.update(ts=0.0, line="")

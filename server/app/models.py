@@ -35,6 +35,7 @@ class Profile(Base):
     temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_tokens: Mapped[int] = mapped_column(Integer, default=2000)
     reasoning_effort: Mapped[str] = mapped_column(String(10), default="")  # ""|low|medium|high
+    web_search: Mapped[bool] = mapped_column(default=False)  # 通义 enable_search，需服务端支持
     is_active: Mapped[bool] = mapped_column(default=False)
     knowledge_base: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # 一期恒 NULL，二期挂载点
     memory: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # 一期恒 NULL，二期挂载点

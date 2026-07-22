@@ -1,4 +1,4 @@
-import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd'
+import { Button, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, message } from 'antd'
 import CandidateInput from '../components/CandidateInput'
 import { useEffect, useState } from 'react'
 import { del, get, post, put } from '../api'
@@ -6,7 +6,7 @@ import { del, get, post, put } from '../api'
 type Profile = {
   id: number; name: string; age_band: string; persona_text: string; voice_hint: string
   provider_id: number | null; model: string; temperature: number | null
-  max_tokens: number; reasoning_effort: string; is_active: boolean
+  max_tokens: number; reasoning_effort: string; web_search: boolean; is_active: boolean
 }
 
 export default function Profiles() {
@@ -104,6 +104,10 @@ export default function Profiles() {
           <Form.Item name="reasoning_effort" label="思考力度（仅思考模型）">
             <Select options={[{ value: '', label: '不设置' }, { value: 'low', label: 'low' },
                               { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }]} />
+          </Form.Item>
+          <Form.Item name="web_search" label="联网搜索（通义 enable_search 参数；需模型服务支持，专属推理端点通常不生效）"
+                     valuePropName="checked">
+            <Switch />
           </Form.Item>
         </Form>
       </Modal>

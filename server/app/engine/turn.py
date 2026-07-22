@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator
 
 from app.engine.errors import ConfigError
+from app.engine.ambient import weather_line
 from app.engine.prompt import assemble_system_prompt, time_context
 from app.engine.transcript import split_transcript
 from app.engine.upstream import UpstreamError, build_chat_body, stream_chat
@@ -79,10 +80,12 @@ class TurnRunner:
                     turn.transcript = heard
                     self.transcript = heard
 
+                weather = await weather_line()
+                ambient = time_context() + ((" " + weather) if weather else "")
                 self.system_prompt = assemble_system_prompt(
                     profile.persona_text,
                     voice_hint=profile.voice_hint if tin.use_voice_hint else "",
-                    time_line=time_context(),
+                    time_line=ambient,
                     protocol_suffix=tin.device_protocol_suffix,
                 )
                 turn.system_prompt = self.system_prompt
@@ -105,6 +108,9 @@ class TurnRunner:
                     max_tokens=profile.max_tokens,
                     reasoning_effort=profile.reasoning_effort,
                 )
+                if profile.web_search:
+                    body["enable_search"] = True  # 通义系兼容参数；不支持的服务会忽略
+
                 base_url, api_key = provider.base_url, provider.api_key
 
             async for delta in stream_chat(base_url, api_key, body):

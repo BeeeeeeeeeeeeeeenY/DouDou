@@ -8,7 +8,7 @@ from app.models import Profile
 router = APIRouter(prefix="/api/admin/profiles")
 
 FIELDS = ("name", "age_band", "persona_text", "voice_hint", "provider_id",
-          "model", "temperature", "max_tokens", "reasoning_effort")
+          "model", "temperature", "max_tokens", "reasoning_effort", "web_search")
 
 
 class ProfileIn(BaseModel):
@@ -21,6 +21,7 @@ class ProfileIn(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     reasoning_effort: str | None = None
+    web_search: bool | None = None
 
 
 def to_json(p: Profile) -> dict:
