@@ -637,7 +637,11 @@ fn run() -> std::io::Result<()> {
                     } else if oracle.is_none() {
                         // No spirit at all: don't eat ink that nothing will
                         // answer — leave the writing and put the reason below.
-                        let y = (new_bbox.y1 + 90).min(SCREEN_H as i32 - 400);
+                        // Placement must clear ALL preserved ink, not just
+                        // this turn's: with co-drawing, older ink can extend
+                        // past new_bbox, so this uses the full accumulated
+                        // bbox (revisit once Task 10 redesigns placement).
+                        let y = (user_ink.bbox.y1 + 90).min(SCREEN_H as i32 - 400);
                         let plan = plan_reply(&font, &oracle_excuse("no oracle"), Some(y));
                         State::Replying { plan, next: Instant::now(), rx: None }
                     } else {
