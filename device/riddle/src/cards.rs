@@ -2,6 +2,7 @@
 //! tablet-enforced clamps from the interaction spec §14.3. The server is
 //! trusted for content, never for shape — anything malformed degrades to
 //! "fewer cards", not to a crash.
+// Temporary: removed when the /turn client wires this module into the run path.
 #![allow(dead_code)]
 
 use serde::Deserialize;
@@ -156,7 +157,7 @@ fn parse_turn_response_with(json: &str, max_text_chars: usize) -> Result<TurnRes
     let paper_cards_raw = raw.paper_cards.ok_or("cards: /turn response missing paper_cards")?;
 
     let mut cards: Vec<Card> =
-        paper_cards_raw.iter().filter_map(|v| convert_card(v, max_text_chars)).collect();
+        paper_cards_raw.iter().filter_map(|v| convert_card(v, max_text_chars, false)).collect();
 
     // §14.3 #1: a `page` card must stand alone. If one is present, keep only
     // the first and drop everything else this turn (including other pages).
@@ -186,7 +187,14 @@ fn parse_turn_response_with(json: &str, max_text_chars: usize) -> Result<TurnRes
 /// per-card §14.3 clamps. `None` means the card was dropped (malformed shape,
 /// unknown stamp name, or an oversize sketch) — always with an `eprintln`
 /// explaining why, never a panic.
-fn convert_card(value: &serde_json::Value, max_text_chars: usize) -> Option<Card> {
+///
+/// `nested`: true when this card came from a `page.layout[]` entry rather
+/// than the top-level `paper_cards[]`. A nested card whose own type is
+/// `page` is rejected rather than recursed into — the spec's "a page card
+/// must stand alone" rule means nested pages are meaningless anyway, and
+/// refusing them structurally caps recursion depth at 1 regardless of how
+/// deeply a malformed payload claims to nest (never a stack overflow).
+fn convert_card(value: &serde_json::Value, max_text_chars: usize, nested: bool) -> Option<Card> {
     let raw: RawCard = match serde_json::from_value(value.clone()) {
         Ok(r) => r,
         Err(e) => {
@@ -254,6 +262,10 @@ fn convert_card(value: &serde_json::Value, max_text_chars: usize) -> Option<Card
             Some(Card::Trace { common, kind, content, guide })
         }
         "page" => {
+            if nested {
+                eprintln!("riddle: cards: nested page card dropped");
+                return None;
+            }
             let Some(items) = raw.layout else {
                 eprintln!("riddle: cards: dropping page card with no layout");
                 return None;
@@ -292,7 +304,7 @@ fn convert_layout_item(
         eprintln!("riddle: cards: dropping page layout item with no rect_norm");
         return None;
     };
-    let card = convert_card(&item.card, max_text_chars)?;
+    let card = convert_card(&item.card, max_text_chars, true)?;
     Some((card, rect))
 }
 
@@ -510,6 +522,23 @@ mod tests {
         let r0 = parse_turn_response(json_zero).unwrap();
         match &r0.paper_cards[0] {
             Card::Stamp { count, .. } => assert_eq!(*count, 1),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_page_cards_are_dropped_not_recursed() {
+        let json = r#"{"turn_id":"t","spoken_text":"","paper_cards":[
+            {"type":"page","layout":[
+                {"card":{"type":"page","layout":[]},"rect_norm":[0.1,0.1,0.5,0.2]},
+                {"card":{"type":"stamp","name":"star","count":1},"rect_norm":[0.1,0.4,0.3,0.2]}
+            ]}],"page_action":"none","memory_tags":[]}"#;
+        let r = parse_turn_response(json).unwrap();
+        match &r.paper_cards[0] {
+            Card::Page { layout } => {
+                assert_eq!(layout.len(), 1, "nested page dropped, stamp kept");
+                assert!(matches!(layout[0].0, Card::Stamp { .. }));
+            }
             other => panic!("{other:?}"),
         }
     }
