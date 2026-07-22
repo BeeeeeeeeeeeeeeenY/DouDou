@@ -7,6 +7,7 @@
 //! QTFB_KEY is set, or full takeover via the vendor engine (quill) when
 //! built with --features takeover and launched with xochitl stopped.
 
+mod cardrender;
 mod cards;
 mod display;
 mod fb;

@@ -60,8 +60,6 @@ fn polyline(vertices: &[(f32, f32)], segments_per_edge: usize) -> Vec<(f32, f32)
     out
 }
 
-// Temporary: consumed by the card renderer task.
-#[allow(dead_code)]
 pub fn strokes_for(name: &str) -> Option<Vec<Vec<(f32, f32)>>> {
     let mut strokes: Vec<Vec<(f32, f32)>> = match name {
         // One-stroke five-pointed star: connect the 5 outer vertices in

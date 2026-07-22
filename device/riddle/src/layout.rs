@@ -1,8 +1,6 @@
 //! Ink-coverage map and placement resolver: a coarse dirty/clear grid over
 //! the page, plus a search that turns a card's semantic `Place` intent into
 //! concrete pixel coordinates that never overlap existing ink.
-// Temporary: consumed by the card renderer task.
-#![allow(dead_code)]
 
 use crate::cards::Place;
 use crate::surface::Surface;
