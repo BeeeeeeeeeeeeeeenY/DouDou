@@ -67,6 +67,10 @@ export default function VoiceSettings() {
       const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm'
       const fd = new FormData()
       fd.append('audio', new Blob(chunks, { type: mime }), `test.${ext}`)
+      // 试听即所见：带上页面当前值，改了不用先保存
+      const cur = form.getFieldsValue(['stt_provider_id', 'stt_model'])
+      if (cur.stt_provider_id != null) fd.append('stt_provider_id', String(cur.stt_provider_id))
+      if (cur.stt_model) fd.append('stt_model', cur.stt_model)
       try {
         const r = await postForm('/api/admin/voice/stt-test', fd)
         setSttResult(r.text)
@@ -80,9 +84,11 @@ export default function VoiceSettings() {
   const ttsTest = async () => {
     try {
       const text = form.getFieldValue('tts_test_text') || '你好，我是豆豆。'
+      // 试听即所见：带上页面当前值，改了不用先保存
+      const cur = form.getFieldsValue(['tts_provider_id', 'tts_model', 'tts_voice', 'tts_speed'])
       const resp = await fetch('/api/admin/voice/tts-test', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, ...cur }),
       })
       if (!resp.ok) { message.error(await resp.text()); return }
       new Audio(URL.createObjectURL(await resp.blob())).play()

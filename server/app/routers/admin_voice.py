@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -59,14 +59,22 @@ def put_settings(body: VoiceIn, db: Session = Depends(get_db)):
 
 
 @router.post("/voice/stt-test")
-async def stt_test(audio: UploadFile, db: Session = Depends(get_db)):
-    try:
-        stt_cfg, _ = load_voice_config(db)
-    except ConfigError as e:
-        raise HTTPException(400, e.message)
+async def stt_test(
+    audio: UploadFile,
+    stt_provider_id: int | None = Form(None),
+    stt_model: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """测转写「试听即所见」：优先用页面当前值（表单字段），缺省回退已保存配置。"""
+    vs = db.get(VoiceSettings, 1)
+    pid = stt_provider_id or vs.stt_provider_id
+    model = stt_model or vs.stt_model
+    p = db.get(Provider, pid) if pid else None
+    if not (p and model):
+        raise HTTPException(400, "请先在 DouDou 后台完成语音配置")
     data = await audio.read()
     try:
-        text = await transcribe(stt_cfg["base_url"], stt_cfg["api_key"], stt_cfg["model"],
+        text = await transcribe(p.base_url, p.api_key, model,
                                 data, audio.filename or "audio.webm")
     except UpstreamError as e:
         raise HTTPException(502, f"语音服务出错（{e.status_code}）：{e.detail[:200]}")
@@ -75,17 +83,25 @@ async def stt_test(audio: UploadFile, db: Session = Depends(get_db)):
 
 class TtsIn(BaseModel):
     text: str
+    tts_provider_id: int | None = None
+    tts_model: str | None = None
+    tts_voice: str | None = None
+    tts_speed: float | None = None
 
 
 @router.post("/voice/tts-test")
 async def tts_test(body: TtsIn, db: Session = Depends(get_db)):
+    """试听「试听即所见」：优先用请求里带的页面当前值，缺省回退已保存配置。"""
+    vs = db.get(VoiceSettings, 1)
+    pid = body.tts_provider_id or vs.tts_provider_id
+    model = body.tts_model or vs.tts_model
+    voice = body.tts_voice if body.tts_voice is not None else vs.tts_voice
+    speed = body.tts_speed or vs.tts_speed
+    p = db.get(Provider, pid) if pid else None
+    if not (p and model):
+        raise HTTPException(400, "请先在 DouDou 后台完成语音配置")
     try:
-        _, tts_cfg = load_voice_config(db)
-    except ConfigError as e:
-        raise HTTPException(400, e.message)
-    try:
-        audio = await synthesize(tts_cfg["base_url"], tts_cfg["api_key"], tts_cfg["model"],
-                                 tts_cfg["voice"], body.text, tts_cfg["speed"])
+        audio = await synthesize(p.base_url, p.api_key, model, voice, body.text, speed)
     except UpstreamError as e:
         raise HTTPException(502, f"语音服务出错（{e.status_code}）：{e.detail[:200]}")
     return Response(content=audio, media_type="audio/mpeg")

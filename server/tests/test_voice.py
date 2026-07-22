@@ -159,3 +159,38 @@ async def test_transcribe_dashscope_error_mapped():
     with pytest.raises(UpstreamError) as ei:
         await transcribe("https://x.dashscope.test/v1", "sk", "m", b"A", "a.mp3")
     assert ei.value.status_code == 400
+
+
+@respx.mock
+def test_tts_test_uses_request_overrides(client):
+    p = client.post("/api/admin/providers",
+                    json={"name": "minimax", "base_url": "https://api.minimax.test/v1",
+                          "api_key": "sk"}).json()
+    route = respx.post("https://api.minimax.test/v1/t2a_v2").mock(
+        return_value=httpx.Response(200, json={
+            "data": {"audio": "4d503320"}, "base_resp": {"status_code": 0},
+        })
+    )
+    # 不保存 voice_settings，直接在请求里带页面当前值
+    r = client.post("/api/admin/voice/tts-test", json={
+        "text": "你好", "tts_provider_id": p["id"],
+        "tts_model": "speech-2.6-hd", "tts_voice": "clever_boy", "tts_speed": 1.2,
+    })
+    assert r.status_code == 200 and r.content == b"MP3 "
+    import json as _json
+    sent = _json.loads(route.calls[0].request.content)
+    assert sent["voice_setting"]["voice_id"] == "clever_boy"
+    assert sent["voice_setting"]["speed"] == 1.2
+
+
+@respx.mock
+def test_stt_test_uses_form_overrides(client):
+    p = client.post("/api/admin/providers",
+                    json={"name": "v", "base_url": "https://v.test/v1", "api_key": "sk"}).json()
+    respx.post("https://v.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "带覆盖参数"})
+    )
+    r = client.post("/api/admin/voice/stt-test",
+                    files={"audio": ("a.webm", b"xx", "audio/webm")},
+                    data={"stt_provider_id": str(p["id"]), "stt_model": "whisper-1"})
+    assert r.json() == {"text": "带覆盖参数"}
