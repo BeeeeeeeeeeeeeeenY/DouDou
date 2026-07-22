@@ -1,0 +1,45 @@
+import sqlite3
+
+from sqlalchemy import text
+
+from app import models
+from app.db import make_sessionmaker
+
+
+def test_curriculum_tables_exist(db):
+    assert db.query(models.Curriculum).count() == 0
+    assert db.query(models.Lesson).count() == 0
+    assert db.query(models.LessonRun).count() == 0
+
+
+def test_defaults(db):
+    cur = models.Curriculum(slug="shapes-01", title="形状小画家")
+    db.add(cur)
+    db.flush()
+    lesson = models.Lesson(curriculum_id=cur.id, seq=1)
+    db.add(lesson)
+    db.flush()
+    run = models.LessonRun(lesson_id=lesson.id)
+    db.add(run)
+    db.commit()
+    assert cur.status == "draft" and cur.current_lesson_id is None
+    assert lesson.duration_min == 10
+    assert run.status == "running" and run.ended_at is None
+    assert run.memory_tags is None  # 一期恒空，二期记忆挂载点
+
+
+def test_turn_has_lesson_run_id(db):
+    db.add(models.Turn(source="phone"))
+    db.commit()
+    assert db.query(models.Turn).one().lesson_run_id is None
+
+
+def test_legacy_turns_table_gains_column(tmp_path):
+    # 模拟一期旧库：turns 表没有 lesson_run_id 列，启动后应被 ALTER 补上
+    con = sqlite3.connect(tmp_path / "doudou.db")
+    con.execute("CREATE TABLE turns (id INTEGER PRIMARY KEY, source VARCHAR(10))")
+    con.commit()
+    con.close()
+    maker = make_sessionmaker(str(tmp_path))
+    with maker() as s:
+        s.execute(text("SELECT lesson_run_id FROM turns"))  # 列不存在会抛 OperationalError
