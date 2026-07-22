@@ -23,6 +23,7 @@ mod script;
 mod stamps;
 mod surface;
 mod touch;
+mod turn;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -78,6 +79,20 @@ const MARGIN_X: i32 = 120;
 /// co-drawing the center of the page is the child's canvas, not Tom's.
 const THINK_X: i32 = SCREEN_W as i32 - 90;
 const THINK_Y: i32 = 90;
+/// How long the diary waits on a silent /turn server before giving up —
+/// shorter than `ORACLE_PATIENCE`: a card turn is a single structured call,
+/// not a model that may lead with a long thinking silence.
+const TURN_PATIENCE: Duration = Duration::from_secs(30);
+
+/// Unix seconds now (0 on a clock error). Names a turn or a page: `turn_id`
+/// at every commit, `page_id` once per sheet — both sides of a fresh
+/// `SystemTime` read, factored out so the two never drift apart.
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 const USAGE: &str = "\
 riddle — the diary of Tom Riddle
@@ -118,6 +133,18 @@ enum State {
         page_full: bool,
     },
     Replying { plan: WritePlan, next: Instant, rx: Option<OracleRx>, page_full: bool },
+    /// Waiting on a structured `/turn` response (Task 12's card path — the
+    /// alternative to Thinking/Replying taken when `turn::turn_mode_enabled()`).
+    /// `anchor`: same "hug the new ink" point `Thinking.origin` resolves
+    /// from, but resolution itself waits until the response's cards are
+    /// known (each card picks its own box size), so only the seed point
+    /// travels here, not a pre-resolved origin. `page_full`: decided at
+    /// commit time, same meaning as everywhere else it appears.
+    CardTurn { rx: mpsc::Receiver<Result<cards::TurnResponse, String>>, page_full: bool, anchor: (i32, i32), since: Instant },
+    /// The response's paper cards, planned into screen-space strokes
+    /// (Task 6-8's `cardrender::plan_card`) and queued up to animate one
+    /// after another, each at its own card's pace/color.
+    DrawingCards { plans: Vec<cardrender::RenderPlan>, plan_i: usize, point_i: usize, next: Instant, page_full: bool },
     /// The guide panel. `panel: None` = dismissed, waiting for pen-up so the
     /// dismissing touch doesn't leave a mark on the page.
     Help { panel: Option<help::Help>, until: Instant },
@@ -327,8 +354,12 @@ fn cards_test(args: &[String]) -> i32 {
     (rendered == 0) as i32
 }
 
-/// Full-page grayscale PNG (2x downscale -> 810x1080, plenty for eyeballing).
-fn write_page_png(surf: &Surface, path: &str) -> std::io::Result<()> {
+/// Full-page grayscale pixels (2x downscale -> 810x1080, plenty for
+/// eyeballing or for a model to read): `(bytes, width, height)`. Shared by
+/// `write_page_png` (a file, for `--cards-test`/`--oracle-test`) and
+/// `page_png_bytes` (in-memory, for the /turn client) — one box filter, two
+/// destinations.
+fn page_gray(surf: &Surface) -> (Vec<u8>, usize, usize) {
     let (w, h) = (surf.w / 2, surf.h / 2);
     let mut gray = vec![0u8; w * h];
     for y in 0..h {
@@ -342,12 +373,57 @@ fn write_page_png(surf: &Surface, path: &str) -> std::io::Result<()> {
             gray[y * w + x] = (acc / 4) as u8;
         }
     }
+    (gray, w, h)
+}
+
+/// Full-page grayscale PNG (2x downscale -> 810x1080, plenty for eyeballing).
+fn write_page_png(surf: &Surface, path: &str) -> std::io::Result<()> {
+    let (gray, w, h) = page_gray(surf);
     let file = std::fs::File::create(path)?;
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
     enc.set_color(png::ColorType::Grayscale);
     enc.set_depth(png::BitDepth::Eight);
     let mut writer = enc.write_header().map_err(std::io::Error::other)?;
     writer.write_image_data(&gray).map_err(std::io::Error::other)
+}
+
+/// Same image as `write_page_png`, encoded straight into memory: what the
+/// /turn client base64-encodes into `page_png` (Task 12) — the whole page,
+/// unlike the legacy oracle's ink-bbox crop (`Ink::to_png`), since a card
+/// turn's server needs to see the full sheet (existing cards, margins, all
+/// of it) to place new ones without overlapping.
+fn page_png_bytes(surf: &Surface) -> std::io::Result<Vec<u8>> {
+    let (gray, w, h) = page_gray(surf);
+    let mut buf = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut buf, w as u32, h as u32);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().map_err(std::io::Error::other)?;
+        writer.write_image_data(&gray).map_err(std::io::Error::other)?;
+    }
+    Ok(buf)
+}
+
+/// Wipe the page and start counting ink from zero: the page-turn action
+/// taken once a finished reply/card-turn's ink coverage was already past
+/// `page_full_threshold()` at commit time (Task 11) — shared by the legacy
+/// Replying path and the card-turn DrawingCards path (Task 12) so the two
+/// can never drift apart. `page_id` resets too: it names the new sheet for
+/// the next `/turn` request.
+fn turn_the_page(
+    surf: &mut Surface,
+    disp: &display::Display,
+    user_ink: &mut ink::Ink,
+    committed_strokes: &mut usize,
+    page_id: &mut u64,
+) {
+    eprintln!("riddle: page turned (coverage past threshold)");
+    surf.fill_rect(0, 0, SCREEN_W, SCREEN_H, WHITE);
+    disp.full_refresh(surf.w, surf.h);
+    user_ink.clear();
+    *committed_strokes = 0;
+    *page_id = unix_secs();
 }
 
 /// What the diary sends alongside the page: its memory of recent turns and
@@ -433,6 +509,16 @@ fn run() -> std::io::Result<()> {
     let mut turn_reply = String::new();
     let mut turn_transcript: Option<String> = None;
     let mut turn_failed = false;
+    // Names the current sheet of paper for the /turn client: a fresh
+    // unix-seconds id at app start, and again every time the page turns
+    // (`turn_the_page`, shared by Task 11's legacy page-turn and
+    // DrawingCards' own). Kept up to date regardless of which oracle path is
+    // active, but only ever read when turn mode is on — the legacy path
+    // never builds a request that needs it.
+    let mut page_id: u64 = unix_secs();
+    // Which teaching profile the server should adapt cards to (spec §5) —
+    // read once; nothing on the tablet changes it mid-session yet.
+    let profile = std::env::var("RIDDLE_PROFILE").unwrap_or_else(|_| "child_3_4".into());
     // Snapshot of `user_ink.stroke_list().len()` as of the last commit.
     // Strokes at or past this index are "new": drawn since the diary last
     // asked the oracle. Co-drawing keeps every committed stroke on the page
@@ -549,8 +635,11 @@ fn run() -> std::io::Result<()> {
                     // Thinking no longer freezes the page: the child can keep
                     // drawing right beside their own ink while Tom composes.
                     // Same inking as Listening, but there is no idle timer
-                    // here to update — Thinking has no `last_pen`.
-                    State::Thinking { .. } => {
+                    // here to update — none of these three states has a
+                    // `last_pen`. CardTurn (waiting on /turn) and
+                    // DrawingCards (the cards animating in) get the same
+                    // treatment: composing/animating never locks the page.
+                    State::Thinking { .. } | State::CardTurn { .. } | State::DrawingCards { .. } => {
                         pen_down = true;
                         let d = match s.tool {
                             pen::Tool::Pen => {
@@ -591,7 +680,7 @@ fn run() -> std::io::Result<()> {
                             ink_dirty.add(d.x1, d.y1, 0);
                         }
                         *last_pen = Some(Instant::now());
-                    } else if let State::Thinking { .. } = state {
+                    } else if matches!(state, State::Thinking { .. } | State::CardTurn { .. } | State::DrawingCards { .. }) {
                         // Same as Listening's inking: no idle timer to touch.
                         pen_down = true;
                         let r = 2 + ev.d.clamp(0, 100) / 45;
@@ -664,7 +753,7 @@ fn run() -> std::io::Result<()> {
                         disp.update(px, py, pw, ph, false);
                         eprintln!("riddle: guide shown");
                         State::Help { panel: Some(panel), until: Instant::now() + Duration::from_secs(45) }
-                    } else if oracle.is_none() {
+                    } else if !turn::turn_mode_enabled() && oracle.is_none() {
                         // No spirit at all: don't eat the ink that nothing
                         // will answer, but don't write an excuse on the page
                         // either (spec §12: a child must never see error
@@ -675,70 +764,111 @@ fn run() -> std::io::Result<()> {
                         // rasterizes the full ink bbox, not just what's
                         // "new") — the child drawing more just carries this
                         // ink along into that turn.
+                        // (Gated on turn mode too: /turn is a self-contained
+                        // path with its own server/mock, independent of the
+                        // legacy chat-completions oracle — a card-turn demo
+                        // shouldn't require a working legacy oracle as well.)
                         eprintln!("riddle: no oracle configured, staying quiet");
                         committed_strokes = user_ink.stroke_list().len();
                         State::Listening { last_pen: None }
                     } else {
-                        if let Err(e) = user_ink.to_png(&surf, PNG_PATH) {
-                            eprintln!("riddle: rasterize failed: {e}");
-                        }
-                        // Decide where the reply will land while `surf` still
-                        // shows exactly what the child just drew (Task 10):
-                        // hug the new ink first, then fall back to any blank
-                        // spot on the page. `None` only when nothing this
-                        // size fits anywhere — the reply then falls back to
-                        // the legacy centered placement.
+                        // Shared by both paths below: what the page looks
+                        // like right now, whether it's already past the
+                        // page-full threshold, and where a reply/card should
+                        // aim to land — all decided while `surf` still shows
+                        // exactly what the child just drew (Task 10).
                         let map = layout::InkMap::from_surface(&surf);
                         // Same map, no second scan: past the threshold means
                         // this reply is the page's last before a fresh sheet.
                         let threshold = page_full_threshold();
                         let page_full = threshold > 0.0 && map.coverage() > threshold;
                         let anchor = (new_bbox.x1 + 60, new_bbox.y0);
-                        let reply_origin = layout::resolve(
-                            &map,
-                            &cards::Place::NearNewInk,
-                            layout::Anchor::Point(anchor.0, anchor.1),
-                            700,
-                            320,
-                        )
-                        .or_else(|| {
-                            layout::resolve(&map, &cards::Place::BlankArea, layout::Anchor::None, 700, 320)
-                        });
-                        if reply_origin.is_none() {
-                            eprintln!("riddle: page full, reply placed center");
-                        }
+
                         // Remember this turn's new strokes for memory — the
                         // page itself is no longer cleared: co-drawing keeps
                         // every committed mark in view beside Tom's reply.
-                        turn_id = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0);
+                        turn_id = unix_secs();
                         turn_strokes = user_ink.stroke_list()[committed_strokes..].to_vec();
                         committed_strokes = user_ink.stroke_list().len();
                         turn_reply.clear();
                         turn_transcript = None;
                         turn_failed = false;
-                        // Ask NOW: the model streams while the diary thinks,
-                        // hiding most of the reply latency in the animation.
-                        let (tx, rx) = mpsc::channel();
-                        if let Some(ref o) = oracle {
-                            o.ask(PNG_PATH, &build_ctx(&store), tx);
-                        }
-                        // Both backends read the page before ask() returns; the
-                        // writer's words don't need to sit on disk afterwards.
-                        if std::env::var_os("RIDDLE_KEEP_PAGE").is_none() {
-                            let _ = std::fs::remove_file(PNG_PATH);
-                        }
-                        // The child's ink stays on the page: no dissolve, no
-                        // Drinking state — straight to Thinking.
-                        State::Thinking {
-                            rx,
-                            pulse: Instant::now(),
-                            blot_on: false,
-                            since: Instant::now(),
-                            origin: reply_origin,
-                            page_full,
+
+                        if turn::turn_mode_enabled() {
+                            // ---- structured /turn path (Task 12) ----
+                            let page_bytes = match page_png_bytes(&surf) {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    eprintln!("riddle: turn page encode failed: {e}");
+                                    Vec::new()
+                                }
+                            };
+                            let page_png_b64 = oracle::base64(&page_bytes);
+                            let turn_id_str = turn_id.to_string();
+                            let page_id_str = page_id.to_string();
+                            let meta = turn::TurnRequestMeta {
+                                turn_id: &turn_id_str,
+                                trigger: "pen_idle",
+                                page_png_b64: &page_png_b64,
+                                new_strokes: &turn_strokes,
+                                ink_coverage: map.coverage(),
+                                page_id: &page_id_str,
+                                profile: &profile,
+                            };
+                            let body = turn::build_request_json(&meta);
+                            let (tx, rx) = mpsc::channel();
+                            turn::fetch(body, tx);
+                            // The corner thinking dot, once — simpler v1: no
+                            // pulsing (unlike Thinking's blot_on toggle),
+                            // since a single structured call is normally
+                            // much quicker than a model's free-text reply.
+                            surf.stamp(THINK_X, THINK_Y, 9, BLACK);
+                            disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
+                            State::CardTurn { rx, page_full, anchor, since: Instant::now() }
+                        } else {
+                            // ---- legacy chat-completions oracle path ----
+                            if let Err(e) = user_ink.to_png(&surf, PNG_PATH) {
+                                eprintln!("riddle: rasterize failed: {e}");
+                            }
+                            // `None` only when nothing this size fits anywhere
+                            // — the reply then falls back to the legacy
+                            // centered placement.
+                            let reply_origin = layout::resolve(
+                                &map,
+                                &cards::Place::NearNewInk,
+                                layout::Anchor::Point(anchor.0, anchor.1),
+                                700,
+                                320,
+                            )
+                            .or_else(|| {
+                                layout::resolve(&map, &cards::Place::BlankArea, layout::Anchor::None, 700, 320)
+                            });
+                            if reply_origin.is_none() {
+                                eprintln!("riddle: page full, reply placed center");
+                            }
+                            // Ask NOW: the model streams while the diary
+                            // thinks, hiding most of the reply latency in the
+                            // animation.
+                            let (tx, rx) = mpsc::channel();
+                            if let Some(ref o) = oracle {
+                                o.ask(PNG_PATH, &build_ctx(&store), tx);
+                            }
+                            // Both backends read the page before ask() returns;
+                            // the writer's words don't need to sit on disk
+                            // afterwards.
+                            if std::env::var_os("RIDDLE_KEEP_PAGE").is_none() {
+                                let _ = std::fs::remove_file(PNG_PATH);
+                            }
+                            // The child's ink stays on the page: no dissolve,
+                            // no Drinking state — straight to Thinking.
+                            State::Thinking {
+                                rx,
+                                pulse: Instant::now(),
+                                blot_on: false,
+                                since: Instant::now(),
+                                origin: reply_origin,
+                                page_full,
+                            }
                         }
                     }
                 }
@@ -906,11 +1036,7 @@ fn run() -> std::io::Result<()> {
                             // sets `turn_failed` — either way an aborted
                             // turn's ink is left untouched, same as memory.
                             if page_full {
-                                eprintln!("riddle: page turned (coverage past threshold)");
-                                surf.fill_rect(0, 0, SCREEN_W, SCREEN_H, WHITE);
-                                disp.full_refresh(surf.w, surf.h);
-                                user_ink.clear();
-                                committed_strokes = 0;
+                                turn_the_page(&mut surf, &disp, &mut user_ink, &mut committed_strokes, &mut page_id);
                             }
                         }
                         turn_strokes = Vec::new();
@@ -927,6 +1053,125 @@ fn run() -> std::io::Result<()> {
                     }
                 } else {
                     State::Replying { plan, next, rx, page_full }
+                }
+            }
+
+            State::CardTurn { rx, page_full, anchor, since } => match rx.try_recv() {
+                Ok(Ok(resp)) => {
+                    // Erase the corner dot on every exit path out of
+                    // CardTurn, same discipline as Thinking's cleanup.
+                    surf.fill_rect((THINK_X - 14) as usize, (THINK_Y - 14) as usize, 28, 28, WHITE);
+                    disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
+
+                    let mut map = layout::InkMap::from_surface(&surf);
+                    let mut plans = Vec::new();
+                    for card in &resp.paper_cards {
+                        plans.extend(cardrender::plan_card(card, &mut map, &font, anchor));
+                    }
+                    // Memory: a card turn has no vision-transcript postscript
+                    // (the ⁂ protocol belongs to the legacy chat-completions
+                    // path only, spoken by a model that reads the persona's
+                    // MEMORY_PROTOCOL — /turn's server-side prompt is out of
+                    // scope here), so transcript is "". `spoken_text` is kept
+                    // as the reply gist for catalog/recall — the cards
+                    // themselves aren't re-derivable from a Card later, but
+                    // the words said about them are enough to find the turn
+                    // again.
+                    if let Some(ref mut s) = store {
+                        s.append(turn_id, "", &resp.spoken_text, &turn_strokes);
+                    }
+                    turn_strokes = Vec::new();
+                    if plans.is_empty() {
+                        eprintln!("riddle: card turn produced nothing to draw");
+                        State::Listening { last_pen: None }
+                    } else {
+                        let page_full = page_full || matches!(resp.page_action, cards::PageAction::NewPage);
+                        State::DrawingCards { plans, plan_i: 0, point_i: 0, next: Instant::now(), page_full }
+                    }
+                }
+                Ok(Err(e)) => {
+                    eprintln!("riddle: turn failed: {e}");
+                    surf.fill_rect((THINK_X - 14) as usize, (THINK_Y - 14) as usize, 28, 28, WHITE);
+                    disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
+                    State::Listening { last_pen: None }
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    if since.elapsed() >= TURN_PATIENCE {
+                        eprintln!("riddle: turn timed out after {}s", TURN_PATIENCE.as_secs());
+                        surf.fill_rect((THINK_X - 14) as usize, (THINK_Y - 14) as usize, 28, 28, WHITE);
+                        disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
+                        State::Listening { last_pen: None }
+                    } else {
+                        State::CardTurn { rx, page_full, anchor, since }
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    surf.fill_rect((THINK_X - 14) as usize, (THINK_Y - 14) as usize, 28, 28, WHITE);
+                    disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
+                    State::Listening { last_pen: None }
+                }
+            },
+
+            State::DrawingCards { mut plans, mut plan_i, mut point_i, next, page_full } => {
+                if Instant::now() >= next {
+                    let mut dirty = BBox::empty();
+                    if plan_i < plans.len() {
+                        // Budget and color both come from the CURRENT plan:
+                        // a slow sketch and a normal-paced stamp don't share
+                        // a pace, and grid/template sub-plans of the same
+                        // trace card don't share a color (FADED vs BLACK).
+                        let mut budget = plans[plan_i].points_per_frame;
+                        let color = plans[plan_i].color;
+                        // Mirrors Replying's stroke-walking loop, but each
+                        // plan's own inner stroke list is drained from the
+                        // front as it finishes (`strokes.remove(0)`) instead
+                        // of tracking a separate stroke index — plan_i/point_i
+                        // are the only position fields DrawingCards carries.
+                        while budget > 0 && !plans[plan_i].strokes.is_empty() {
+                            let stroke_len = plans[plan_i].strokes[0].len();
+                            if point_i >= stroke_len {
+                                plans[plan_i].strokes.remove(0);
+                                point_i = 0;
+                                continue;
+                            }
+                            let (x, y) = plans[plan_i].strokes[0][point_i];
+                            if point_i > 0 {
+                                let (px, py) = plans[plan_i].strokes[0][point_i - 1];
+                                surf.brush_line(px, py, x, y, 2, color);
+                            } else {
+                                surf.stamp(x, y, 2, color);
+                            }
+                            dirty.add(x, y, 4);
+                            point_i += 1;
+                            budget -= 1;
+                        }
+                        if plans[plan_i].strokes.is_empty() {
+                            plan_i += 1;
+                            point_i = 0;
+                        }
+                    }
+                    if !dirty.is_empty() {
+                        let (x, y, w, h) = dirty.rect();
+                        disp.update(x, y, w, h, true);
+                    }
+                    if plan_i >= plans.len() {
+                        // Every card is drawn: same page-turn action as a
+                        // finished reply (Task 11), gated the same way.
+                        if page_full {
+                            turn_the_page(&mut surf, &disp, &mut user_ink, &mut committed_strokes, &mut page_id);
+                        }
+                        State::Listening { last_pen: None }
+                    } else {
+                        State::DrawingCards {
+                            plans,
+                            plan_i,
+                            point_i,
+                            next: Instant::now() + Duration::from_millis(14),
+                            page_full,
+                        }
+                    }
+                } else {
+                    State::DrawingCards { plans, plan_i, point_i, next, page_full }
                 }
             }
 

@@ -2,8 +2,6 @@
 //! tablet-enforced clamps from the interaction spec §14.3. The server is
 //! trusted for content, never for shape — anything malformed degrades to
 //! "fewer cards", not to a crash.
-// Temporary: removed when the /turn client wires this module into the run path.
-#![allow(dead_code)]
 
 use serde::Deserialize;
 
@@ -88,10 +86,25 @@ pub enum Card {
 
 #[derive(Debug, Clone)]
 pub struct TurnResponse {
+    /// Echoed back by the server for its own correlation/logging. The
+    /// tablet never reads this back out: main.rs already has its own
+    /// canonical turn id (the commit-time unix-seconds `turn_id`, generated
+    /// tablet-side and sent in the *request*) and has no need to compare it
+    /// against what the response repeats. Read by a parser test (cards.rs's
+    /// own `parses_full_response_and_truncates_to_three_cards`), so only a
+    /// non-test build would otherwise warn — scoped allow, not a module-wide
+    /// one, now that the rest of this module is live on the run path.
+    #[allow(dead_code)]
     pub turn_id: String,
     pub spoken_text: String,
     pub paper_cards: Vec<Card>,
     pub page_action: PageAction,
+    /// Parsed and kept for a future phone/server-side catalog (spec §14.2);
+    /// nothing on the tablet reads a turn's own memory tags back out today
+    /// (the diary's on-device catalog, memory.rs, is keyed by transcript/
+    /// reply gist instead) — narrow, scoped allow rather than a module-wide
+    /// one now that the rest of this module is live on the run path.
+    #[allow(dead_code)]
     pub memory_tags: Vec<String>,
 }
 
