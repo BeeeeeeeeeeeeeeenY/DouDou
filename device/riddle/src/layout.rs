@@ -100,9 +100,13 @@ impl InkMap {
     /// Searches outward from the cell containing `seed` in Chebyshev rings
     /// (closest candidates first), so the result naturally stays near the
     /// seed when the seed itself is already clear. Cells off the edge of
-    /// the page count as dirty, so a returned rect (plus its margin) can
-    /// never hang off the page. `None` if nothing on the whole page fits —
-    /// the caller should retry at a smaller size.
+    /// the page count as dirty for the ink-clearance check; separately, the
+    /// returned coordinate is checked against the true `screen_w`/`screen_h`
+    /// (not just the cell grid, which rounds them up to whole cells) — so
+    /// the returned CONTENT rect itself never hangs off the true page,
+    /// even though its margin buffer may reach into the last cell's
+    /// rounding overhang. `None` if nothing on the whole page fits — the
+    /// caller should retry at a smaller size.
     pub fn find_spot(
         &self,
         want_w: i32,
@@ -144,8 +148,22 @@ impl InkMap {
                 if col + gw > self.cols || row + gh > self.rows {
                     continue;
                 }
+                let (px, py) = (col as i32 * CELL as i32 + margin, row as i32 * CELL as i32 + margin);
+                // `self.cols`/`self.rows` round screen_w/screen_h UP to
+                // whole cells (1625x2175 for the 1620x2160 target), so a
+                // candidate can pass the check above yet still place
+                // content past the true edge. `px`/`py` already have
+                // `margin` folded in (they're the CONTENT's own top-left,
+                // not the padded footprint's), so the guarantee we want —
+                // content rect [px, px+want_w) x [py, py+want_h) lies
+                // fully within [0, screen_w) x [0, screen_h) — is just
+                // this, with no extra `+ margin`: adding it again would
+                // double-count the margin already baked into px/py.
+                if px + want_w > self.screen_w as i32 || py + want_h > self.screen_h as i32 {
+                    continue;
+                }
                 if rect_sum(&ii, iw, row, col, gh, gw) == 0 {
-                    return Some((col as i32 * CELL as i32 + margin, row as i32 * CELL as i32 + margin));
+                    return Some((px, py));
                 }
             }
         }
@@ -382,6 +400,29 @@ mod tests {
             assert!(
                 x + 50 <= 1616 || x >= 1620 || y + 50 <= 2156 || y >= 2160,
                 "({x},{y}) overlaps the inked corner"
+            );
+        }
+    }
+
+    #[test]
+    fn find_spot_never_overhangs_the_true_screen_edge() {
+        // Only the bottom two cell rows (85, 86 — pixels y:2125..2175,
+        // truncated to the true 2160 edge) are left clear. A want_h=45
+        // (gh=2 cells) box's only cell-grid-valid row is 85, landing its
+        // content at y=2125..2170 — 10px past the true screen_h=2160. Before
+        // the fix this was returned anyway (validated only against the
+        // rounded-up 87-row grid, not the true 2160px height); the fix must
+        // reject it, either by finding a spot that's genuinely in bounds or
+        // — as here, since row 85 is the *only* cell-grid-valid option —
+        // by correctly giving up with `None`. Either is fine; an
+        // out-of-bounds `Some` is not.
+        let mut m = InkMap::new(1620, 2160);
+        m.mark_rect(0, 0, 1620, 2110);
+        let got = m.find_spot(100, 45, (800, 2140), 0);
+        if let Some((x, y)) = got {
+            assert!(
+                x + 100 <= 1620 && y + 45 <= 2160,
+                "({x},{y}) places content past the true screen edge"
             );
         }
     }
