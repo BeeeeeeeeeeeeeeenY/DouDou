@@ -39,43 +39,82 @@ export default function Curricula() {
   const [form] = Form.useForm()
 
   const loadCurricula = async () => {
-    const list: Curriculum[] = await get('/api/admin/curricula')
-    setCurricula(list)
-    const cur = list.find(c => selected && c.id === selected.id) ?? list.find(c => c.status === 'active') ?? list[0] ?? null
-    setSelected(cur)
-    if (cur) setLessons(await get(`/api/admin/curricula/${cur.id}/lessons`))
-    else setLessons([])
+    try {
+      const list: Curriculum[] = await get('/api/admin/curricula')
+      setCurricula(list)
+      const cur = list.find(c => selected && c.id === selected.id) ?? list.find(c => c.status === 'active') ?? list[0] ?? null
+      setSelected(cur)
+      if (cur) setLessons(await get(`/api/admin/curricula/${cur.id}/lessons`))
+      else setLessons([])
+    } catch (e) {
+      message.error(String(e))
+    }
   }
-  const loadRuns = async () => setRuns((await get('/api/admin/lesson-runs?limit=50')).items)
+  const loadRuns = async () => {
+    try {
+      setRuns((await get('/api/admin/lesson-runs?limit=50')).items)
+    } catch (e) {
+      message.error(String(e))
+    }
+  }
 
   useEffect(() => { loadCurricula(); loadRuns() }, [])
 
   const seed = async () => {
-    await post('/api/admin/curricula/seed-shapes01')
-    message.success('已导入「形状小画家」示范课程')
-    loadCurricula()
+    try {
+      await post('/api/admin/curricula/seed-shapes01')
+      message.success('已导入「形状小画家」示范课程')
+      loadCurricula()
+    } catch (e) {
+      message.error(String(e))
+    }
   }
-  const activate = async (c: Curriculum) => { await post(`/api/admin/curricula/${c.id}/activate`); loadCurricula() }
+  const activate = async (c: Curriculum) => {
+    try {
+      await post(`/api/admin/curricula/${c.id}/activate`)
+      loadCurricula()
+    } catch (e) {
+      message.error(String(e))
+    }
+  }
   const setPointer = async (lessonId: number | null) => {
     if (!selected) return
-    await put(`/api/admin/curricula/${selected.id}/pointer`, { lesson_id: lessonId })
-    message.success('当前课时已更新')
-    loadCurricula()
+    try {
+      await put(`/api/admin/curricula/${selected.id}/pointer`, { lesson_id: lessonId })
+      message.success('当前课时已更新')
+      loadCurricula()
+    } catch (e) {
+      message.error(String(e))
+    }
   }
   const pickCurriculum = async (c: Curriculum) => {
-    setSelected(c)
-    setLessons(await get(`/api/admin/curricula/${c.id}/lessons`))
+    try {
+      setSelected(c)
+      setLessons(await get(`/api/admin/curricula/${c.id}/lessons`))
+    } catch (e) {
+      message.error(String(e))
+    }
   }
   const saveLesson = async () => {
     if (!editing) return
-    await put(`/api/admin/lessons/${editing.id}`, await form.validateFields())
-    setEditing(null)
-    message.success('课时已保存')
-    if (selected) setLessons(await get(`/api/admin/curricula/${selected.id}/lessons`))
+    let values
+    try { values = await form.validateFields() } catch { return }
+    try {
+      await put(`/api/admin/lessons/${editing.id}`, values)
+      setEditing(null)
+      message.success('课时已保存')
+      if (selected) setLessons(await get(`/api/admin/curricula/${selected.id}/lessons`))
+    } catch (e) {
+      message.error(String(e))
+    }
   }
   const fixRun = async (r: Run, patch: object) => {
-    await put(`/api/admin/lesson-runs/${r.id}`, patch)
-    loadRuns()
+    try {
+      await put(`/api/admin/lesson-runs/${r.id}`, patch)
+      loadRuns()
+    } catch (e) {
+      message.error(String(e))
+    }
   }
 
   return (
