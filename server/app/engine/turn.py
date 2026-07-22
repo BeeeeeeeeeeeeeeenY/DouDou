@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator
 
 from app.engine.errors import ConfigError
-from app.engine.prompt import assemble_system_prompt
+from app.engine.prompt import assemble_system_prompt, time_context
 from app.engine.transcript import split_transcript
 from app.engine.upstream import UpstreamError, build_chat_body, stream_chat
 from app.models import Profile, Provider, Turn
@@ -82,6 +82,7 @@ class TurnRunner:
                 self.system_prompt = assemble_system_prompt(
                     profile.persona_text,
                     voice_hint=profile.voice_hint if tin.use_voice_hint else "",
+                    time_line=time_context(),
                     protocol_suffix=tin.device_protocol_suffix,
                 )
                 turn.system_prompt = self.system_prompt

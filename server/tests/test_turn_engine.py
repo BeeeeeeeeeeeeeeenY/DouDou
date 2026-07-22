@@ -49,7 +49,11 @@ async def test_stream_and_log(app, db):
     body = json.loads(route.calls[0].request.content)
     assert body["model"] == "gpt-4o-mini" and body["max_tokens"] == 1500
     assert body["messages"][0]["role"] == "system"
-    assert body["messages"][0]["content"] == "你是 DouDou。\n\n记忆协议：xxx"  # 无 voice_hint
+    sys_prompt = body["messages"][0]["content"]
+    assert sys_prompt.startswith("你是 DouDou。")
+    assert "当前时间：" in sys_prompt          # 时间注入
+    assert sys_prompt.endswith("\n\n记忆协议：xxx")  # 协议后缀保持在末尾
+    assert "语音要更短。" not in sys_prompt      # 无 voice_hint
     assert body["messages"][1]["content"] == "(an earlier page) 早"
     user = body["messages"][-1]["content"]
     assert user[0] == {"type": "text", "text": "（手写页）"}
@@ -75,7 +79,9 @@ async def test_voice_hint_applied_for_phone(app, db):
     [_ async for _ in runner.stream()]
     import json
     body = json.loads(route.calls[0].request.content)
-    assert body["messages"][0]["content"] == "你是 DouDou。\n\n语音要更短。"
+    sys_prompt = body["messages"][0]["content"]
+    assert sys_prompt.startswith("你是 DouDou。\n\n语音要更短。")
+    assert "当前时间：" in sys_prompt
 
 
 async def test_no_active_profile_raises_config_error(app, db):

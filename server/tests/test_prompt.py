@@ -29,3 +29,17 @@ def test_assemble_with_voice_hint_and_suffix():
 
 def test_assemble_blank_voice_hint_ignored():
     assert assemble_system_prompt("你是 DouDou。", voice_hint="   ") == "你是 DouDou。"
+
+
+def test_time_context_format():
+    from datetime import datetime
+    from app.engine.prompt import time_context
+    line = time_context(datetime(2026, 7, 22, 16, 5))
+    assert line.startswith("当前时间：2026年7月22日 星期三 16:05。")
+
+
+def test_assemble_with_time_line_before_protocol():
+    out = assemble_system_prompt(
+        "人设。", voice_hint="口语。", time_line="当前时间：X。", protocol_suffix="\n\n记忆协议：y"
+    )
+    assert out == "人设。\n\n口语。\n\n当前时间：X。\n\n记忆协议：y"
