@@ -11,6 +11,11 @@ pub const STAMP_NAMES: [&str; 8] =
 pub const MAX_CARDS: usize = 3;
 pub const MAX_SKETCH_POINTS: usize = 2000;
 pub const DEFAULT_MAX_TEXT_CHARS: usize = 6;
+/// Stamps render as one plan per instance (Task 7); the interaction spec
+/// draws reward stamps as a short row that wraps after 3, so 5 is a
+/// generous ceiling that keeps an unclamped server value from exploding the
+/// render queue.
+pub const MAX_STAMP_COUNT: u32 = 5;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Place {
@@ -216,7 +221,7 @@ fn convert_card(value: &serde_json::Value, max_text_chars: usize) -> Option<Card
         }
         "stamp" => {
             let common = raw_common(&raw);
-            let count = raw.count.unwrap_or(1);
+            let count = raw.count.unwrap_or(1).clamp(1, MAX_STAMP_COUNT);
             let Some(name) = raw.name else {
                 eprintln!("riddle: cards: dropping stamp card with no name");
                 return None;
@@ -485,6 +490,26 @@ mod tests {
                 assert!(matches!(card, Card::Trace { .. }));
                 assert!((rect.2 - 0.8).abs() < 1e-6);
             }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn stamp_count_is_clamped_to_five() {
+        let json = r#"{"turn_id":"t","spoken_text":"","paper_cards":[
+            {"type":"stamp","name":"star","count":99}],"page_action":"none","memory_tags":[]}"#;
+        let r = parse_turn_response(json).unwrap();
+        match &r.paper_cards[0] {
+            Card::Stamp { count, .. } => assert_eq!(*count, 5),
+            other => panic!("{other:?}"),
+        }
+
+        // 0 is meaningless for a reward stamp; clamp up to the floor of 1.
+        let json_zero = r#"{"turn_id":"t","spoken_text":"","paper_cards":[
+            {"type":"stamp","name":"star","count":0}],"page_action":"none","memory_tags":[]}"#;
+        let r0 = parse_turn_response(json_zero).unwrap();
+        match &r0.paper_cards[0] {
+            Card::Stamp { count, .. } => assert_eq!(*count, 1),
             other => panic!("{other:?}"),
         }
     }
