@@ -18,6 +18,7 @@ mod pen;
 mod power;
 mod qtfb;
 mod script;
+mod stamps;
 mod surface;
 mod touch;
 
