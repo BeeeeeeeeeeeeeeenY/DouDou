@@ -79,3 +79,54 @@ def test_stt_test_upstream_error_502(client):
     r = client.post("/api/admin/voice/stt-test", files={"audio": ("a.webm", b"xx", "audio/webm")})
     assert r.status_code == 502
     assert "语音服务出错" in r.json()["detail"]
+
+
+@respx.mock
+async def test_synthesize_minimax_native():
+    route = respx.post("https://api.minimax.test/v1/t2a_v2").mock(
+        return_value=httpx.Response(200, json={
+            "data": {"audio": "4d503320"},  # hex of b"MP3 "
+            "base_resp": {"status_code": 0, "status_msg": "success"},
+        })
+    )
+    audio = await synthesize("https://api.minimax.test/v1", "sk", "speech-2.6-hd",
+                             "lovely_girl", "你好", speed=1.0)
+    assert audio == b"MP3 "
+    import json as _json
+    sent = _json.loads(route.calls[0].request.content)
+    assert sent["voice_setting"]["voice_id"] == "lovely_girl"
+    assert sent["model"] == "speech-2.6-hd" and sent["stream"] is False
+
+
+@respx.mock
+async def test_synthesize_minimax_business_error():
+    respx.post("https://api.minimax.test/v1/t2a_v2").mock(
+        return_value=httpx.Response(200, json={
+            "base_resp": {"status_code": 1004, "status_msg": "invalid voice"},
+        })
+    )
+    from app.engine.upstream import UpstreamError
+    with pytest.raises(UpstreamError) as ei:
+        await synthesize("https://api.minimax.test/v1", "sk", "m", "bad_voice", "你好")
+    assert "1004" in ei.value.detail
+
+
+@respx.mock
+def test_provider_voices_minimax(client):
+    p = client.post("/api/admin/providers",
+                    json={"name": "minimax", "base_url": "https://api.minimax.test/v1",
+                          "api_key": "sk"}).json()
+    respx.post("https://api.minimax.test/v1/get_voice").mock(
+        return_value=httpx.Response(200, json={
+            "system_voice": [{"voice_id": "lovely_girl", "voice_name": "萌萌女童"}],
+        })
+    )
+    r = client.get(f"/api/admin/providers/{p['id']}/voices").json()
+    assert r["voices"] == [{"id": "lovely_girl", "name": "萌萌女童"}]
+
+
+def test_provider_voices_non_minimax_empty(client):
+    p = client.post("/api/admin/providers",
+                    json={"name": "qwen", "base_url": "https://q.test/v1", "api_key": "sk"}).json()
+    r = client.get(f"/api/admin/providers/{p['id']}/voices").json()
+    assert r["voices"] == []

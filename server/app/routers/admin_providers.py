@@ -70,6 +70,30 @@ def delete_provider(pid: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@router.get("/{pid}/voices")
+def list_voices(pid: int, db: Session = Depends(get_db)):
+    """音色候选：MiniMax 走原生 get_voice；其他 provider 无标准音色接口，返回空（手填）。"""
+    p = _get_or_404(db, pid)
+    if "minimax" not in p.base_url:
+        return {"voices": [], "error": ""}
+    try:
+        resp = httpx.post(
+            f"{p.base_url}/get_voice",
+            headers={"Authorization": f"Bearer {p.api_key}"},
+            json={"voice_type": "system"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return {"voices": [], "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        voices = [
+            {"id": v.get("voice_id", ""), "name": v.get("voice_name", "")}
+            for v in resp.json().get("system_voice", [])
+        ]
+        return {"voices": voices, "error": ""}
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as e:
+        return {"voices": [], "error": str(e)}
+
+
 @router.post("/{pid}/test")
 def test_provider(pid: int, db: Session = Depends(get_db)):
     p = _get_or_404(db, pid)
