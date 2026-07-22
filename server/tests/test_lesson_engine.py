@@ -79,10 +79,22 @@ def test_close_run_completed_advances_and_attaches(db):
     close_run_with_report(db, run, {"status": "completed", "highlights": "亮", "parent_tip": "提"}, "{...}")
     assert run.status == "completed" and run.ended_at is not None
     assert run.highlights == "亮" and run.parent_tip == "提"
+    assert run.raw_report["_raw"] == "{...}"
     assert run.artifact_turn_ids == [tablet.id]
     assert db.get(models.Turn, tablet.id).lesson_run_id == run.id
     assert db.get(models.Turn, other.id).lesson_run_id is None
     assert db.get(models.Curriculum, cur.id).current_lesson_id == l2.id
+
+
+def test_close_run_completed_does_not_steal_moved_pointer(db):
+    cur, l1, l2 = _seed_minimal(db)
+    cur.current_lesson_id = l2.id  # 家长手动把指针改到了别的课
+    db.commit()
+    run = models.LessonRun(lesson_id=l1.id)
+    db.add(run)
+    db.commit()
+    close_run_with_report(db, run, {"status": "completed"}, "")
+    assert db.get(models.Curriculum, cur.id).current_lesson_id == l2.id  # 不抢
 
 
 def test_close_run_partial_keeps_pointer(db):

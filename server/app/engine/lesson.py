@@ -32,6 +32,8 @@ def render_lesson_script(script_text: str, prev_recap: str) -> str:
 
 
 def format_recap(title: str, highlights: str, parent_tip: str) -> str:
+    highlights = highlights or ""
+    parent_tip = parent_tip or ""
     out = f"上次上的是《{title}》。孩子的表现：{highlights}"
     if parent_tip:
         out += f"（当时给家长的延伸建议：{parent_tip}）"
@@ -57,11 +59,13 @@ def latest_recap(db, curriculum_id: int) -> str:
 
 def attach_artifacts(db, run: LessonRun) -> None:
     """把 run 起止窗内、尚未归属的平板轮挂为本课作品（spec §8 时间窗自动挂靠）。"""
+    window_end = run.ended_at or utcnow()
     turns = (
         db.query(Turn)
         .filter(
             Turn.source == "tablet",
             Turn.ts >= run.started_at,
+            Turn.ts <= window_end,
             Turn.lesson_run_id.is_(None),
         )
         .order_by(Turn.id)
@@ -94,7 +98,7 @@ def close_run_with_report(db, run: LessonRun, report: dict, raw: str) -> None:
     run.status = status if status in VALID_REPORT_STATUS else "partial"
     run.highlights = str(report.get("highlights", ""))
     run.parent_tip = str(report.get("parent_tip", ""))
-    run.raw_report = report
+    run.raw_report = dict(report, _raw=raw) if raw else report
     run.ended_at = utcnow()
     attach_artifacts(db, run)
     if run.status == "completed":
