@@ -64,6 +64,9 @@ export default function TestBench() {
             if (autoRead && reply) readAloud(reply)
           }
         })
+    } catch (e) {
+      message.error(String(e))
+      setMsgs(m => [...m.slice(0, -1), { role: 'assistant', text: `⚠️ ${String(e)}` }])
     } finally {
       setBusy(false)
       setImageB64(null)
@@ -71,12 +74,16 @@ export default function TestBench() {
   }
 
   const readAloud = async (t: string) => {
-    const resp = await fetch('/api/admin/voice/tts-test', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: t }),
-    })
-    if (resp.ok) new Audio(URL.createObjectURL(await resp.blob())).play()
-    else message.error(await resp.text())
+    try {
+      const resp = await fetch('/api/admin/voice/tts-test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: t }),
+      })
+      if (resp.ok) new Audio(URL.createObjectURL(await resp.blob())).play()
+      else message.error(await resp.text())
+    } catch (e) {
+      message.error(String(e))
+    }
   }
 
   return (

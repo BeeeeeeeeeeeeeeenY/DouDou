@@ -10,8 +10,8 @@ export default function VoiceSettings() {
   const [form] = Form.useForm()
 
   useEffect(() => {
-    get('/api/admin/providers').then(setProviders)
-    get('/api/admin/voice-settings').then(v => form.setFieldsValue(v))
+    get('/api/admin/providers').then(setProviders).catch(e => message.error(String(e)))
+    get('/api/admin/voice-settings').then(v => form.setFieldsValue(v)).catch(e => message.error(String(e)))
   }, [form])
 
   const save = async () => {
@@ -47,20 +47,24 @@ export default function VoiceSettings() {
   }
 
   const ttsTest = async () => {
-    const text = form.getFieldValue('tts_test_text') || '你好，我是豆豆。'
-    const resp = await fetch('/api/admin/voice/tts-test', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    })
-    if (!resp.ok) { message.error(await resp.text()); return }
-    new Audio(URL.createObjectURL(await resp.blob())).play()
+    try {
+      const text = form.getFieldValue('tts_test_text') || '你好，我是豆豆。'
+      const resp = await fetch('/api/admin/voice/tts-test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      if (!resp.ok) { message.error(await resp.text()); return }
+      new Audio(URL.createObjectURL(await resp.blob())).play()
+    } catch (e) {
+      message.error(String(e))
+    }
   }
 
   const providerOpts = providers.map(p => ({ value: p.id, label: p.name }))
   return (
     <Form form={form} layout="vertical" style={{ maxWidth: 560 }}>
       <Card title="语音识别（STT）" style={{ marginBottom: 16 }}>
-        <Form.Item name="stt_provider_id" label="Provider"><Select options={providerOpts} allowClear /></Form.Item>
+        <Form.Item name="stt_provider_id" label="服务商"><Select options={providerOpts} allowClear /></Form.Item>
         <Form.Item name="stt_model" label="模型（如 whisper-1）"><Input /></Form.Item>
         <Space>
           <Button onClick={recordTest} danger={recording}>
@@ -70,7 +74,7 @@ export default function VoiceSettings() {
         </Space>
       </Card>
       <Card title="语音合成（TTS）" style={{ marginBottom: 16 }}>
-        <Form.Item name="tts_provider_id" label="Provider"><Select options={providerOpts} allowClear /></Form.Item>
+        <Form.Item name="tts_provider_id" label="服务商"><Select options={providerOpts} allowClear /></Form.Item>
         <Form.Item name="tts_model" label="模型（如 tts-1）"><Input /></Form.Item>
         <Form.Item name="tts_voice" label="音色（如 alloy）"><Input /></Form.Item>
         <Form.Item name="tts_speed" label="语速"><InputNumber min={0.5} max={2} step={0.1} /></Form.Item>
