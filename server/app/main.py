@@ -25,4 +25,17 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     app.include_router(phone.router)
     app.include_router(files.router)
 
+    import os
+
+    from fastapi.responses import FileResponse
+
+    dist = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "dist")
+    if os.path.isdir(dist):
+        @app.get("/{path:path}")
+        def spa(path: str):
+            full = os.path.normpath(os.path.join(dist, path))
+            if full.startswith(dist) and os.path.isfile(full):
+                return FileResponse(full)
+            return FileResponse(os.path.join(dist, "index.html"))
+
     return app
