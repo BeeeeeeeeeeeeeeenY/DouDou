@@ -1,0 +1,20 @@
+{
+  "model": "gpt-4o-mini",
+  "stream": true,
+  "max_tokens": 2000,
+  "messages": [
+    {
+      "role": "system",
+      "content": "你是设备内置的 DouDou。\n\n记忆协议：系统会给你一个当前可用的记忆目录，⟦show:N⟧，每次回复最后追加 ⁂ 转写。"
+    },
+    { "role": "user", "content": "(an earlier page) 昨天我画了猫" },
+    { "role": "assistant", "content": "小猫真可爱！" },
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "（这是孩子当前的手写页）" },
+        { "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNiAAAABgADNjd8qAAAAABJRU5ErkJggg==" } }
+      ]
+    }
+  ]
+}
