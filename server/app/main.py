@@ -13,11 +13,13 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     def health():
         return {"ok": True}
 
-    from app.routers import (admin_profiles, admin_providers, admin_test,
-                             admin_turns, admin_voice, files, openai_compat, phone)
+    from app.routers import (admin_curricula, admin_profiles, admin_providers,
+                             admin_test, admin_turns, admin_voice, files,
+                             openai_compat, phone)
 
     app.include_router(admin_providers.router)
     app.include_router(admin_profiles.router)
+    app.include_router(admin_curricula.router)
     app.include_router(admin_voice.router)
     app.include_router(admin_test.router)
     app.include_router(admin_turns.router)
