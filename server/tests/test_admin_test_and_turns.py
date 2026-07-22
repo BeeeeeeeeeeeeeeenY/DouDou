@@ -61,3 +61,13 @@ def test_turns_list_and_detail(client):
     detail = client.get(f"/api/admin/turns/{item['id']}").json()
     assert detail["system_prompt"].startswith("你是 DouDou。")
     assert client.get("/api/admin/turns/999").status_code == 404
+
+
+def test_test_turn_malformed_image_400(client):
+    r = client.post("/api/admin/test-turn", json={"text": "hi", "image_base64": "data:image/png;base64,xxx"})
+    assert r.status_code == 400
+
+
+def test_test_turn_malformed_history_400(client):
+    r = client.post("/api/admin/test-turn", json={"text": "hi", "history": [["only-one"]]})
+    assert r.status_code == 400

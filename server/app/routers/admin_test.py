@@ -1,7 +1,8 @@
 import base64
+import binascii
 import json
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -21,13 +22,17 @@ class TestTurnIn(BaseModel):
 
 @router.post("/test-turn")
 async def test_turn(body: TestTurnIn, request: Request):
-    msgs: list[dict] = []
-    for u, a in body.history:
-        msgs.append({"role": "user", "content": u})
-        msgs.append({"role": "assistant", "content": a})
+    try:
+        msgs: list[dict] = []
+        for u, a in body.history:
+            msgs.append({"role": "user", "content": str(u)})
+            msgs.append({"role": "assistant", "content": str(a)})
+        image_png = base64.b64decode(body.image_base64) if body.image_base64 else None
+    except (ValueError, TypeError, binascii.Error) as e:
+        raise HTTPException(400, f"请求参数格式错误：{e}")
     tin = TurnInput(
         source="test", text=body.text,
-        image_png=base64.b64decode(body.image_base64) if body.image_base64 else None,
+        image_png=image_png,
         history=msgs, use_voice_hint=body.voice_mode,
     )
     runner = TurnRunner(request.app.state.sessionmaker, request.app.state.data_dir, tin)
