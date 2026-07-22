@@ -52,6 +52,23 @@ fn idle_commit() -> Duration {
         idle_commit_from(v.as_deref().ok())
     })
 }
+
+/// Coverage ratio (parsed) that triggers a fresh sheet once the current
+/// reply finishes. 0.0 is kept as a valid, meaningful value (it means "auto
+/// page turns disabled") rather than folded into the parse-failure fallback.
+fn page_full_threshold_from(raw: Option<&str>) -> f32 {
+    raw.and_then(|v| v.parse::<f32>().ok()).filter(|t| (0.0..=1.0).contains(t)).unwrap_or(0.55)
+}
+
+/// Coverage ratio that triggers a fresh sheet once the current reply
+/// finishes. RIDDLE_PAGE_FULL overrides (0 disables auto page turns).
+fn page_full_threshold() -> f32 {
+    static CACHE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let v = std::env::var("RIDDLE_PAGE_FULL");
+        page_full_threshold_from(v.as_deref().ok())
+    })
+}
 /// How long the diary waits on a silent oracle before giving up on the turn.
 /// Generous: thinking models can lead with a long silence.
 const ORACLE_PATIENCE: Duration = Duration::from_secs(120);
@@ -88,8 +105,19 @@ enum State {
     /// the page as it stood then. `None` means nothing that size fit
     /// anywhere (a nearly-full page); the reply then falls back to the
     /// legacy centered placement.
-    Thinking { rx: OracleRx, pulse: Instant, blot_on: bool, since: Instant, origin: Option<(i32, i32)> },
-    Replying { plan: WritePlan, next: Instant, rx: Option<OracleRx> },
+    /// `page_full`: the page's ink coverage (from that same commit-time map)
+    /// was already past `page_full_threshold()` before this reply even
+    /// started — carried through so a completed reply can trigger the page
+    /// turn afterward (Task 11).
+    Thinking {
+        rx: OracleRx,
+        pulse: Instant,
+        blot_on: bool,
+        since: Instant,
+        origin: Option<(i32, i32)>,
+        page_full: bool,
+    },
+    Replying { plan: WritePlan, next: Instant, rx: Option<OracleRx>, page_full: bool },
     /// The guide panel. `panel: None` = dismissed, waiting for pen-up so the
     /// dismissing touch doesn't leave a mark on the page.
     Help { panel: Option<help::Help>, until: Instant },
@@ -661,6 +689,10 @@ fn run() -> std::io::Result<()> {
                         // size fits anywhere — the reply then falls back to
                         // the legacy centered placement.
                         let map = layout::InkMap::from_surface(&surf);
+                        // Same map, no second scan: past the threshold means
+                        // this reply is the page's last before a fresh sheet.
+                        let threshold = page_full_threshold();
+                        let page_full = threshold > 0.0 && map.coverage() > threshold;
                         let anchor = (new_bbox.x1 + 60, new_bbox.y0);
                         let reply_origin = layout::resolve(
                             &map,
@@ -706,13 +738,14 @@ fn run() -> std::io::Result<()> {
                             blot_on: false,
                             since: Instant::now(),
                             origin: reply_origin,
+                            page_full,
                         }
                     }
                 }
                 _ => State::Listening { last_pen },
             },
 
-            State::Thinking { rx, pulse, blot_on, since, origin } => match rx.try_recv() {
+            State::Thinking { rx, pulse, blot_on, since, origin, page_full } => match rx.try_recv() {
                 Ok(result) => {
                     surf.fill_rect((THINK_X - 14) as usize, (THINK_Y - 14) as usize, 28, 28, WHITE);
                     disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
@@ -738,13 +771,13 @@ fn run() -> std::io::Result<()> {
                         Ok(Event::Ink(text)) => {
                             turn_reply.push_str(&text);
                             let plan = plan_reply(&font, &text, None, origin);
-                            State::Replying { plan, next: Instant::now(), rx: Some(rx) }
+                            State::Replying { plan, next: Instant::now(), rx: Some(rx), page_full }
                         }
                         Ok(Event::Transcript(t)) => {
                             // Transcript with no prose (model skipped the
                             // reply): remember the words, keep waiting.
                             turn_transcript = Some(t);
-                            State::Thinking { rx, pulse, blot_on, since, origin }
+                            State::Thinking { rx, pulse, blot_on, since, origin, page_full }
                         }
                         Err(e) => {
                             // Quiet failure (spec §12): stderr only, nothing
@@ -772,15 +805,23 @@ fn run() -> std::io::Result<()> {
                             surf.stamp(THINK_X, THINK_Y, 9, BLACK);
                         }
                         disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
-                        State::Thinking { rx, pulse: Instant::now(), blot_on: !blot_on, since, origin }
+                        State::Thinking { rx, pulse: Instant::now(), blot_on: !blot_on, since, origin, page_full }
                     } else {
-                        State::Thinking { rx, pulse, blot_on, since, origin }
+                        State::Thinking { rx, pulse, blot_on, since, origin, page_full }
                     }
                 }
-                Err(mpsc::TryRecvError::Disconnected) => State::Listening { last_pen: None },
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // Fast-follow from the Task 10 review: this arm used to
+                    // return to Listening without erasing the corner dot,
+                    // leaving a stray blot when the channel drops without a
+                    // final Ok/Err (mirrors the timeout arm's cleanup above).
+                    surf.fill_rect((THINK_X - 14) as usize, (THINK_Y - 14) as usize, 28, 28, WHITE);
+                    disp.update(THINK_X - 14, THINK_Y - 14, 28, 28, true);
+                    State::Listening { last_pen: None }
+                }
             },
 
-            State::Replying { mut plan, next, mut rx } => {
+            State::Replying { mut plan, next, mut rx, page_full } => {
                 // More of the reply may still be streaming in: append each
                 // new chunk below what is already planned, mid-animation.
                 if let Some(ref r) = rx {
@@ -854,6 +895,23 @@ fn run() -> std::io::Result<()> {
                                     &turn_strokes,
                                 );
                             }
+                            // `page_full` was decided at commit time (Task
+                            // 11), before the oracle was even asked — so only
+                            // a reply that actually finished turns the page.
+                            // Nested inside the same `!turn_failed` gate as
+                            // the memory write above: a Thinking-side failure
+                            // (oracle error, ORACLE_PATIENCE timeout, or a
+                            // channel disconnect) never even reaches this
+                            // branch, and a mid-reply failure reaches it but
+                            // sets `turn_failed` — either way an aborted
+                            // turn's ink is left untouched, same as memory.
+                            if page_full {
+                                eprintln!("riddle: page turned (coverage past threshold)");
+                                surf.fill_rect(0, 0, SCREEN_W, SCREEN_H, WHITE);
+                                disp.full_refresh(surf.w, surf.h);
+                                user_ink.clear();
+                                committed_strokes = 0;
+                            }
                         }
                         turn_strokes = Vec::new();
                         // The reply stays on the page for good now — no more
@@ -865,10 +923,10 @@ fn run() -> std::io::Result<()> {
                         // child draws again.
                         State::Listening { last_pen: None }
                     } else {
-                        State::Replying { plan, next: Instant::now() + Duration::from_millis(14), rx }
+                        State::Replying { plan, next: Instant::now() + Duration::from_millis(14), rx, page_full }
                     }
                 } else {
-                    State::Replying { plan, next, rx }
+                    State::Replying { plan, next, rx, page_full }
                 }
             }
 
@@ -1156,5 +1214,14 @@ mod tests {
         assert_eq!(idle_commit_from(Some("4.5")), Duration::from_millis(4500));
         assert_eq!(idle_commit_from(Some("abc")), Duration::from_millis(6000));
         assert_eq!(idle_commit_from(Some("0")), Duration::from_millis(6000)); // 0 无意义，回退
+    }
+
+    #[test]
+    fn page_full_threshold_defaults_to_0_55_and_parses_overrides() {
+        assert_eq!(page_full_threshold_from(None), 0.55);
+        assert_eq!(page_full_threshold_from(Some("0.7")), 0.7);
+        assert_eq!(page_full_threshold_from(Some("abc")), 0.55);
+        assert_eq!(page_full_threshold_from(Some("1.5")), 0.55); // 超出 0..=1，回退
+        assert_eq!(page_full_threshold_from(Some("0")), 0.0); // 0 是合法值：关闭自动换页
     }
 }
