@@ -91,8 +91,8 @@ class TurnRunner:
                 self.system_prompt = assemble_system_prompt(
                     profile.persona_text,
                     voice_hint=profile.voice_hint if tin.use_voice_hint else "",
-                    time_line=ambient,
                     lesson_context=tin.lesson_context,
+                    time_line=ambient,
                     protocol_suffix=tin.device_protocol_suffix,
                 )
                 turn.system_prompt = self.system_prompt
