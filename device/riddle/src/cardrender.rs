@@ -25,6 +25,21 @@ pub struct RenderPlan {
     #[allow(dead_code)]
     pub points_per_frame: i32,
     pub region: fb::BBox,
+    /// Bitmap card payload: when `Some`, this plan does not animate as
+    /// frame-by-frame strokes — instead it is a one-shot
+    /// paste_rect(bgra) + swap_raw(mode 5). Stroke cards are always `None`.
+    pub blit: Option<ImageBlit>,
+}
+
+/// A decoded image card's pixel payload, ready to hand to
+/// `Surface::paste_rect`.
+#[derive(Debug, Clone)]
+pub struct ImageBlit {
+    /// Pixel (x, y, w, h).
+    pub rect: (i32, i32, i32, i32),
+    /// `w*h*4` bytes of BGRA (B, G, R, 0xFF) — matches `Surface`'s Rgb32
+    /// pixel layout for a direct `paste_rect`.
+    pub bgra: Vec<u8>,
 }
 
 /// Square placement-box side, in pixels, for each `Size` tier (relative to
@@ -117,7 +132,7 @@ fn make_plan(strokes: Vec<Vec<(i32, i32)>>, color: u16, points_per_frame: i32) -
     if !any {
         return None;
     }
-    Some(RenderPlan { strokes, color, points_per_frame, region })
+    Some(RenderPlan { strokes, color, points_per_frame, region, blit: None })
 }
 
 /// Push `plan` (if any) onto `out`, marking its region on `map` immediately
@@ -858,6 +873,88 @@ fn trace_plans_in_rect(
 }
 
 // ---------------------------------------------------------------------
+// Image: decode a server-supplied PNG to BGRA and place it, unscaled, at
+// its native pixel size via the layout resolver. Unlike every other card
+// kind this produces no strokes at all — the animation loop draws it as a
+// single blit instead.
+// ---------------------------------------------------------------------
+
+/// Decode `card`'s PNG to BGRA and resolve it a native-size, non-overlapping
+/// spot on the page. Decode failure, an unsupported PNG color type, or no
+/// room anywhere on the page all drop the card quietly (an `eprintln`,
+/// never a panic) and return an empty vec — the same contract every other
+/// `plan_*` function follows.
+pub fn plan_image(card: &cards::Card, map: &mut layout::InkMap) -> Vec<RenderPlan> {
+    let cards::Card::Image { common, png } = card else {
+        return Vec::new();
+    };
+
+    // —— decode PNG -> (w, h) + raw RGBA8/RGB8 —— //
+    let decoder = png::Decoder::new(std::io::Cursor::new(png));
+    let mut reader = match decoder.read_info() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("riddle: cards: image PNG header error: {e}");
+            return Vec::new();
+        }
+    };
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = match reader.next_frame(&mut buf) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("riddle: cards: image PNG decode error: {e}");
+            return Vec::new();
+        }
+    };
+    let (w, h) = (info.width as i32, info.height as i32);
+    if w <= 0 || h <= 0 {
+        return Vec::new();
+    }
+
+    // —— pack BGRA (B, G, R, 0xFF) —— //
+    let px = &buf[..info.buffer_size()];
+    let bgra: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => px.chunks_exact(4).flat_map(|c| [c[2], c[1], c[0], 0xFF]).collect(),
+        png::ColorType::Rgb => px.chunks_exact(3).flat_map(|c| [c[2], c[1], c[0], 0xFF]).collect(),
+        other => {
+            eprintln!("riddle: cards: unsupported image color type {other:?}, dropping");
+            return Vec::new();
+        }
+    };
+
+    // —— ask layout for a w x h spot that doesn't overlap existing ink —— //
+    let anchor = match common.anchor_norm {
+        Some((nx, ny)) => layout::Anchor::Point(
+            (nx * fb::SCREEN_W as f32).round() as i32,
+            (ny * fb::SCREEN_H as f32).round() as i32,
+        ),
+        None => layout::Anchor::None,
+    };
+    let Some((x, y)) = layout::resolve(map, &common.place, anchor, w, h) else {
+        eprintln!("riddle: cards: no room for {w}x{h} image card, dropping");
+        return Vec::new();
+    };
+
+    let mut region = fb::BBox::empty();
+    region.add(x, y, 0);
+    region.add(x + w - 1, y + h - 1, 0);
+
+    let mut out = Vec::new();
+    commit(
+        Some(RenderPlan {
+            strokes: Vec::new(),
+            color: surface::BLACK,
+            points_per_frame: 0,
+            region,
+            blit: Some(ImageBlit { rect: (x, y, w, h), bgra }),
+        }),
+        map,
+        &mut out,
+    );
+    out
+}
+
+// ---------------------------------------------------------------------
 // Page: the one place the server picks explicit coordinates. Each child
 // renders straight into its `rect_norm` box, bypassing `layout::resolve`
 // entirely; the ink map is still updated so later top-level cards (or a
@@ -909,11 +1006,12 @@ fn plan_in_rect(
         cards::Card::Page { .. } => {
             eprintln!("riddle: cards: nested page card dropped in render");
         }
-        // Image rendering (plan_image) lands in Task 2 of the image-card
-        // plan; this arm exists only to satisfy match exhaustiveness now
-        // that cards.rs (Task 1) parses `Card::Image`.
+        // `page.layout`-nested images are unused by this demo (the server
+        // never emits an `image` child inside a `page` card's layout) —
+        // drop quietly rather than build an unexercised in-rect blit path.
+        // Revisit if a future page ever nests one.
         cards::Card::Image { .. } => {
-            eprintln!("riddle: cardrender: image card not yet rendered (Task 2)");
+            eprintln!("riddle: cardrender: image card not supported inside page.layout, dropping");
         }
     }
     out
@@ -964,13 +1062,7 @@ pub fn plan_card(
             plan_trace(common, *kind, content, *guide, map, font, anchor)
         }
         cards::Card::Page { layout: items } => plan_page(items, map, font),
-        // Image rendering (plan_image) lands in Task 2 of the image-card
-        // plan; this arm exists only to satisfy match exhaustiveness now
-        // that cards.rs (Task 1) parses `Card::Image`.
-        cards::Card::Image { .. } => {
-            eprintln!("riddle: cardrender: image card not yet rendered (Task 2)");
-            Vec::new()
-        }
+        cards::Card::Image { .. } => plan_image(card, map),
     }
 }
 
@@ -1113,5 +1205,53 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    use crate::cards::{Card, CardCommon, Pace, Place, Size};
+    use crate::layout::InkMap;
+
+    fn red_png_card(w: u32, h: u32) -> Card {
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, w, h);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut writer = enc.write_header().unwrap();
+            let data: Vec<u8> = (0..(w * h)).flat_map(|_| [255u8, 0, 0, 255]).collect();
+            writer.write_image_data(&data).unwrap();
+        }
+        Card::Image {
+            common: CardCommon { place: Place::BlankArea, anchor_norm: None, size: Size::L, pace: Pace::Normal },
+            png,
+        }
+    }
+
+    #[test]
+    fn plan_image_decodes_to_bgra_blit_of_native_size() {
+        let mut map = InkMap::new(1620, 2160);
+        let card = red_png_card(6, 5);
+        let plans = plan_image(&card, &mut map);
+        assert_eq!(plans.len(), 1, "one blit plan");
+        let blit = plans[0].blit.as_ref().expect("blit present");
+        let (_, _, w, h) = blit.rect;
+        assert_eq!((w, h), (6, 5), "native PNG size, no scaling");
+        assert_eq!(blit.bgra.len(), (6 * 5 * 4) as usize);
+        // Red pixel RGBA[255,0,0,255] -> BGRA[0,0,255,255]
+        assert_eq!(&blit.bgra[0..4], &[0u8, 0, 255, 255]);
+        assert!(plans[0].strokes.is_empty(), "image plan carries no strokes");
+    }
+
+    #[test]
+    fn plan_image_drops_undecodable_png() {
+        let mut map = InkMap::new(1620, 2160);
+        let card = Card::Image {
+            common: CardCommon { place: Place::BlankArea, anchor_norm: None, size: Size::L, pace: Pace::Normal },
+            png: vec![1, 2, 3, 4], // not a PNG
+        };
+        assert!(plan_image(&card, &mut map).is_empty());
     }
 }
