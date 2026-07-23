@@ -271,3 +271,16 @@ def test_end_run_attaches_artifacts(client, db):
     assert run.status == "abandoned"
     assert run.artifact_turn_ids == [tablet.id]
     assert db.get(models.Turn, tablet.id).lesson_run_id == run_id
+
+
+def test_clear_board_sets_pending_command(client, db):
+    setup_course(client)
+    run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
+    j = client.post("/api/phone/clear-board").json()
+    assert j["ok"] is True
+    assert db.get(models.LessonRun, run_id).pending_command == "clear"
+
+
+def test_clear_board_without_running_lesson(client, db):
+    j = client.post("/api/phone/clear-board").json()
+    assert j["ok"] is False

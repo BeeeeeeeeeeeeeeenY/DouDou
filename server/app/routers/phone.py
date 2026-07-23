@@ -89,6 +89,18 @@ def end_lesson_run(run_id: int, db: Session = Depends(get_db)):
     return {"ok": True, "status": run.status}
 
 
+@router.post("/clear-board")
+def clear_board(db: Session = Depends(get_db)):
+    """手机「清空画板」按钮：给当前房间挂 clear 命令，平板轮询到即清屏。"""
+    run = (db.query(LessonRun).filter(LessonRun.status == "running")
+           .order_by(LessonRun.id.desc()).first())
+    if run is None:
+        return {"ok": False, "reason": "no_running_lesson"}
+    run.pending_command = "clear"
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/voice-turn")
 async def voice_turn(
     request: Request,
