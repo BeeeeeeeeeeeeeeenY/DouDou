@@ -118,6 +118,56 @@ def test_voice_turn_with_lesson_full_loop(client, db):
 
 
 @respx.mock
+def test_voice_turn_report_before_any_drawing_keeps_run_running(client, db):
+    """孩子还没在平板上开画，模型就发收尾打标——不能关课。守住房间，
+    治「刚打招呼说句『好』就被判未参与关课→房间死→语音豆豆瞎编画」。"""
+    setup_course(client)
+    run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
+    respx.post("https://up.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "好"})
+    )
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=sse_reply("那今天就到这里啦！\n" + REPORT))
+    )
+    respx.post("https://up.test/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"MP3")
+    )
+    j = client.post(
+        "/api/phone/voice-turn",
+        files={"audio": ("a.webm", b"x", "audio/webm")},
+        data={"history": "[]", "lesson_run_id": str(run_id)},
+    ).json()
+    # 打标行照常剥离、不外显；但因未开画，报告一律忽略、不外传
+    assert "lesson_report" not in j["reply_text"]
+    assert j["lesson_report"] is None
+    # 关键：房间仍 running，指针没被推进
+    assert db.get(models.LessonRun, run_id).status == "running"
+
+
+@respx.mock
+def test_voice_turn_malformed_report_before_drawing_keeps_running(client, db):
+    """未开画时的坏 JSON 打标同样不关课（不 abandon 空房间）。"""
+    setup_course(client)
+    run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
+    respx.post("https://up.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "好"})
+    )
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=sse_reply("收尾啦 ⟦lesson_report⟧{oops"))
+    )
+    respx.post("https://up.test/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"MP3")
+    )
+    j = client.post(
+        "/api/phone/voice-turn",
+        files={"audio": ("a.webm", b"x", "audio/webm")},
+        data={"history": "[]", "lesson_run_id": str(run_id)},
+    ).json()
+    assert j["reply_text"] == "收尾啦" and j["lesson_report"] is None
+    assert db.get(models.LessonRun, run_id).status == "running"
+
+
+@respx.mock
 def test_voice_turn_mid_lesson_no_report(client, db):
     setup_course(client)
     run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
@@ -167,6 +217,10 @@ def test_voice_turn_with_closed_run_falls_back_to_chat(client, db):
 def test_voice_turn_malformed_report_abandons_run(client, db):
     setup_course(client)
     run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
+    # 已开画（本房间有平板作品）后模型才收尾，坏 JSON 走 abandon 兜底
+    db.add(models.Turn(source="tablet", input_image_path="images/d.png",
+                       lesson_run_id=run_id))
+    db.commit()
     respx.post("https://up.test/v1/audio/transcriptions").mock(
         return_value=httpx.Response(200, json={"text": "上完啦"})
     )

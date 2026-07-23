@@ -25,6 +25,8 @@ def test_seed_scripts_are_complete(client, db):
         assert "五环节" in l.script_text and l.goal_text and l.materials
         assert l.segments and len(l.segments) == 5
         assert l.segments[3]["channel"] == "tablet"         # 第④环节走平板
+        # 未开画不收尾护栏：孩子还没在平板上提交画作前，绝不收尾/打标
+        assert "还没在平板上画" in l.script_text
 
 
 def test_seed_idempotent(client, db):

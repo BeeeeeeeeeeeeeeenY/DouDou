@@ -1,5 +1,7 @@
 import json
 
+from sqlalchemy import and_, or_
+
 from app.models import Curriculum, Lesson, LessonRun, Turn, utcnow
 
 LESSON_REPORT_MARK = "⟦lesson_report⟧"
@@ -86,6 +88,30 @@ def attach_artifacts(db, run: LessonRun) -> None:
         t.lesson_run_id = run.id
         ids.append(t.id)
     run.artifact_turn_ids = ids
+
+
+def run_has_drawing(db, run: LessonRun) -> bool:
+    """本房间是否已有平板画作提交。收尾门槛：孩子还没在平板上开画，就不让
+    模型收尾/打标关课（治「刚打招呼说句『好』就被判未参与关课→房间死→语音
+    豆豆取不到本房间图开始瞎编画」）。「属于本房间」的判定与 attach_artifacts
+    保持一致：已挂靠本 run，或尚未挂靠但落在本 run 的起止时间窗内。"""
+    window_end = run.ended_at or utcnow()
+    exists_q = (
+        db.query(Turn.id)
+        .filter(
+            Turn.source == "tablet",
+            or_(
+                Turn.lesson_run_id == run.id,
+                and_(
+                    Turn.lesson_run_id.is_(None),
+                    Turn.ts >= run.started_at,
+                    Turn.ts <= window_end,
+                ),
+            ),
+        )
+        .exists()
+    )
+    return bool(db.query(exists_q).scalar())
 
 
 def advance_pointer(db, run: LessonRun) -> None:

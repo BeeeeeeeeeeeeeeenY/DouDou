@@ -13,6 +13,7 @@ from app.engine.lesson import (
     close_run_with_report,
     latest_recap,
     render_lesson_script,
+    run_has_drawing,
 )
 from app.engine.tts import synthesize
 from app.engine.turn import TurnInput, TurnRunner
@@ -164,12 +165,17 @@ async def voice_turn(
         if active_run_id is not None:
             run = db.get(LessonRun, active_run_id)
             if run is not None and run.status == "running":
-                if report is not None:
-                    close_run_with_report(db, run, report, raw)
-                    lesson_report_out = {"status": run.status, "highlights": run.highlights,
-                                         "parent_tip": run.parent_tip}
-                elif raw:
-                    close_run_malformed(db, run, raw)  # 坏 JSON 兜底：保留原文、按未收尾关闭
+                # 未开画不关课：孩子还没在平板上画东西前，模型的收尾/打标一律
+                # 忽略，房间继续 running。守住房间，避免刚打招呼就被判未参与关课
+                # →房间死→语音豆豆取不到本房间图开始瞎编画。打标行已在引擎剥离、
+                # 不外显；仅在孩子已开画后才认收尾。
+                if run_has_drawing(db, run):
+                    if report is not None:
+                        close_run_with_report(db, run, report, raw)
+                        lesson_report_out = {"status": run.status, "highlights": run.highlights,
+                                             "parent_tip": run.parent_tip}
+                    elif raw:
+                        close_run_malformed(db, run, raw)  # 坏 JSON 兜底：保留原文、按未收尾关闭
         try:
             _, tts_cfg = load_voice_config(db)
             audio_bytes = await synthesize(tts_cfg["base_url"], tts_cfg["api_key"],
