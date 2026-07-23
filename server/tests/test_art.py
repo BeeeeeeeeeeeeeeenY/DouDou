@@ -2,7 +2,7 @@ from app.engine import art
 
 
 def test_all_subjects_load_as_png():
-    assert len(art.IMAGE_SUBJECTS) == 15
+    assert len(art.IMAGE_SUBJECTS) == 16  # + balloon（蓝色气球，双通道重构）
     for s in art.IMAGE_SUBJECTS:
         b = art.load_art_png(s)
         assert b is not None and b[:4] == b"\x89PNG", f"{s} not a PNG"
