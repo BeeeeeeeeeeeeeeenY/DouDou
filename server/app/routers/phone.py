@@ -117,11 +117,31 @@ async def voice_turn(
                     lesson_context = render_lesson_script(lesson.script_text, recap)
                     active_run_id = run.id
 
+    # 让语音豆豆"看见"孩子此刻在平板上画的整页（模型有视觉）：取最近一次
+    # tablet /turn 存下的整页图，随语音一起送进模型——一个豆豆，既听又看。
+    tablet_image: bytes | None = None
+    with request.app.state.sessionmaker() as db:  # type: Session
+        row = (db.query(Turn)
+               .filter(Turn.source == "tablet", Turn.input_image_path.isnot(None))
+               .order_by(Turn.id.desc()).first())
+        if row is not None and row.input_image_path:
+            try:
+                with open(f"{request.app.state.data_dir}/{row.input_image_path}", "rb") as f:
+                    tablet_image = f.read()
+            except OSError:
+                tablet_image = None
+    draw_note = (
+        "\n\n（下面附了孩子此刻在平板上画的整页。请结合 ta 画的内容和 ta 说的话来回应，"
+        "像真的看着 ta 的画一样，可以夸具体的形状/线条/数量。）"
+        if tablet_image is not None else ""
+    )
+
     data = await audio.read()
     tin = TurnInput(source="phone", audio=data,
                     audio_filename=audio.filename or "audio.webm",
                     history=msgs, use_voice_hint=True,
-                    lesson_context=lesson_context, lesson_run_id=active_run_id)
+                    lesson_context=lesson_context, lesson_run_id=active_run_id,
+                    image_png=tablet_image, device_protocol_suffix=draw_note)
     runner = TurnRunner(request.app.state.sessionmaker, request.app.state.data_dir, tin)
     try:
         async for _ in runner.stream():

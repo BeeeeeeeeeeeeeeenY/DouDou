@@ -59,6 +59,7 @@ async def turn(req: TurnRequest, request: Request):
 
     lesson_context = ""
     recent_replies: list[str] = []
+    recent_voice: list[str] = []
     with request.app.state.sessionmaker() as db:
         found = active_current_lesson(db)
         if found is not None:
@@ -74,8 +75,17 @@ async def turn(req: TurnRequest, request: Request):
             sp = cj.get("spoken_text")
             if sp:
                 recent_replies.append(sp)
+        # 最近的语音对话：让平板豆豆知道手机上正在聊什么（一个豆豆，画面呼应对话）。
+        prows = (db.query(Turn).filter(Turn.source == "phone", Turn.transcript.isnot(None))
+                 .order_by(Turn.id.desc()).limit(3).all())
+        for r in reversed(prows):
+            if r.transcript:
+                recent_voice.append(f"孩子说「{r.transcript}」，你回「{(r.reply_text or '')[:40]}」")
 
     user_text = TURN_USER_TEXT
+    if recent_voice:
+        user_text += (f"\n（孩子刚才和你在语音里聊到：{'；'.join(recent_voice)}。"
+                      "你的纸面回应可以呼应这段对话。）")
     if recent_replies:
         joined = "；".join(recent_replies)
         user_text += (f"\n（你最近几轮已经这样回应过：{joined}。这次务必换新说法、"
