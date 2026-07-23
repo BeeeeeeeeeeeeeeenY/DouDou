@@ -955,13 +955,14 @@ fn run() -> std::io::Result<()> {
                 Some(t)
                     if !pen_down
                         && t.elapsed() >= idle_commit()
-                        && user_ink.stroke_list().len().saturating_sub(committed_strokes) >= 2 =>
+                        && user_ink.stroke_list().len().saturating_sub(committed_strokes) >= 1 =>
                 {
-                    // `new_strokes >= 2` above already implies the page holds
-                    // ink; assert that invariant explicitly, since
-                    // `committed_strokes` is a raw index that only tracks
-                    // growth and could drift if ink were ever erased away
-                    // from under it.
+                    // A single new stroke commits — a child who draws one shape
+                    // (one continuous stroke) should be answered. The longer
+                    // idle_commit() window (6s default) is what guards against a
+                    // stray dot triggering; the region_all_white check below
+                    // still drops ink that was erased during the pause. This
+                    // arm only runs with >=1 new stroke, so the page holds ink.
                     debug_assert!(!user_ink.is_empty());
                     // Scope every commit-time check to the ink drawn since the
                     // last commit, not the whole page's history: older,
