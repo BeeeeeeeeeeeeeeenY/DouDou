@@ -910,6 +910,14 @@ pub fn plan_image(card: &cards::Card, map: &mut layout::InkMap) -> Vec<RenderPla
     if w <= 0 || h <= 0 {
         return Vec::new();
     }
+    // The `png` crate's default transformations do not down-convert 16-bit
+    // samples to 8-bit, so a 16-bit PNG would be mis-decoded here (garbled
+    // colour, wrong-length buffer) if we let it fall through to the packing
+    // step below — enforce the "only 8-bit Rgba/Rgb" contract explicitly.
+    if info.bit_depth != png::BitDepth::Eight {
+        eprintln!("riddle: cards: unsupported image bit depth {:?}, dropping", info.bit_depth);
+        return Vec::new();
+    }
 
     // —— pack BGRA (B, G, R, 0xFF) —— //
     let px = &buf[..info.buffer_size()];
@@ -1253,5 +1261,57 @@ mod image_tests {
             png: vec![1, 2, 3, 4], // not a PNG
         };
         assert!(plan_image(&card, &mut map).is_empty());
+    }
+
+    fn green_rgb_png_card(w: u32, h: u32) -> Card {
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, w, h);
+            enc.set_color(png::ColorType::Rgb);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut writer = enc.write_header().unwrap();
+            let data: Vec<u8> = (0..(w * h)).flat_map(|_| [0u8, 255, 0]).collect();
+            writer.write_image_data(&data).unwrap();
+        }
+        Card::Image {
+            common: CardCommon { place: Place::BlankArea, anchor_norm: None, size: Size::L, pace: Pace::Normal },
+            png,
+        }
+    }
+
+    #[test]
+    fn plan_image_decodes_rgb_no_alpha_to_bgra_blit() {
+        let mut map = InkMap::new(1620, 2160);
+        let card = green_rgb_png_card(6, 5);
+        let plans = plan_image(&card, &mut map);
+        assert_eq!(plans.len(), 1, "one blit plan");
+        let blit = plans[0].blit.as_ref().expect("blit present");
+        let (_, _, w, h) = blit.rect;
+        assert_eq!((w, h), (6, 5), "native PNG size, no scaling");
+        assert_eq!(blit.bgra.len(), (6 * 5 * 4) as usize);
+        // Green RGB[0,255,0] -> BGRA[0,255,0,255]
+        assert_eq!(&blit.bgra[0..4], &[0u8, 255, 0, 255]);
+        for px in blit.bgra.chunks_exact(4) {
+            assert_eq!(px, &[0u8, 255, 0, 255]);
+        }
+    }
+
+    #[test]
+    fn plan_image_drops_16bit_png() {
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 4, 4);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Sixteen);
+            let mut writer = enc.write_header().unwrap();
+            let data: Vec<u8> = (0..(4 * 4)).flat_map(|_| [0xFFu8, 0xFF, 0, 0, 0, 0, 0xFF, 0xFF]).collect();
+            writer.write_image_data(&data).unwrap();
+        }
+        let mut map = InkMap::new(1620, 2160);
+        let card = Card::Image {
+            common: CardCommon { place: Place::BlankArea, anchor_norm: None, size: Size::L, pace: Pace::Normal },
+            png,
+        };
+        assert!(plan_image(&card, &mut map).is_empty(), "16-bit PNG must be dropped, not mis-decoded");
     }
 }
