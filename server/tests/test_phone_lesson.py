@@ -118,6 +118,24 @@ def test_voice_turn_with_lesson_full_loop(client, db):
 
 
 @respx.mock
+def test_voice_turn_sets_pending_demo(client, db):
+    setup_course(client)
+    run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
+    respx.post("https://up.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "该画了"}))
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=sse_reply("我们先画一个圆圆的\n⟦demo:circle⟧")))
+    respx.post("https://up.test/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"MP3"))
+    j = client.post("/api/phone/voice-turn",
+                    files={"audio": ("a.webm", b"x", "audio/webm")},
+                    data={"history": "[]", "lesson_run_id": str(run_id)}).json()
+    assert "demo" not in j["reply_text"]                 # 标记不外泄
+    assert db.get(models.LessonRun, run_id).pending_demo == "circle"
+    assert db.get(models.LessonRun, run_id).status == "running"  # demo 不关课
+
+
+@respx.mock
 def test_voice_turn_report_before_any_drawing_keeps_run_running(client, db):
     """孩子还没在平板上开画，模型就发收尾打标——不能关课。守住房间，
     治「刚打招呼说句『好』就被判未参与关课→房间死→语音豆豆瞎编画」。"""
