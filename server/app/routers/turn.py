@@ -7,6 +7,7 @@ from app.engine import cards as cards_engine
 from app.engine.errors import ConfigError
 from app.engine.turn import TurnInput, TurnRunner
 from app.engine.upstream import UpstreamError
+from app.models import Turn
 
 router = APIRouter()
 
@@ -72,4 +73,12 @@ async def turn(req: TurnRequest, request: Request):
 
     spoken, cards, page_action, tags = cards_engine.build_cards(
         runner.reply_text, req.device_profile.profile)
-    return _response(req.turn_id, spoken, cards, page_action, tags)
+    resp = _response(req.turn_id, spoken, cards, page_action, tags)
+    if runner.turn_id is not None:
+        with request.app.state.sessionmaker() as db:
+            t = db.get(Turn, runner.turn_id)
+            if t is not None:
+                t.cards_json = {"spoken_text": spoken, "paper_cards": cards,
+                                "page_action": page_action, "memory_tags": tags}
+                db.commit()
+    return resp

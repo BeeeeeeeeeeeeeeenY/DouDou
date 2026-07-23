@@ -72,6 +72,7 @@ class Turn(Base):
     status: Mapped[str] = mapped_column(String(10), default="ok")  # ok|error
     error: Mapped[str] = mapped_column(Text, default="")
     lesson_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cards_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class Curriculum(Base):

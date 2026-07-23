@@ -18,6 +18,7 @@ def _ensure_column(engine, table: str, column: str, ddl: str) -> None:
 def _migrate(engine) -> None:
     """老库补列清单（须在 create_all 之后调用，保证表已存在）。"""
     _ensure_column(engine, "turns", "lesson_run_id", "lesson_run_id INTEGER")
+    _ensure_column(engine, "turns", "cards_json", "cards_json JSON")
     _ensure_column(engine, "profiles", "web_search", "web_search BOOLEAN DEFAULT 0")
 
 

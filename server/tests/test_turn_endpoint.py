@@ -79,3 +79,33 @@ def test_turn_runs_model_and_returns_cards(client, db):
 def test_turn_without_active_profile_returns_400(client):
     r = client.post("/turn", json=_min_body())
     assert r.status_code == 400
+
+
+@respx.mock
+def test_turn_persists_cards_json(client, db):
+    _setup_active_profile(db)
+    reply = json.dumps({"spoken_text": "好", "paper_cards": [
+        {"type": "text", "content": "太阳", "size": "L"}]}, ensure_ascii=False)
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=_sse(reply)))
+
+    client.post("/turn", json=_min_body(page_png="QUJD"))
+
+    from app import models as m
+    row = db.query(m.Turn).filter(m.Turn.source == "tablet").order_by(m.Turn.id.desc()).first()
+    assert row is not None
+    assert row.cards_json is not None
+    assert row.cards_json["paper_cards"][0]["content"] == "太阳"
+
+
+def test_legacy_turns_table_gains_cards_json_column(tmp_path):
+    import sqlite3
+    from sqlalchemy import text
+    con = sqlite3.connect(tmp_path / "doudou.db")
+    con.execute("CREATE TABLE turns (id INTEGER PRIMARY KEY, source VARCHAR(10))")
+    con.commit()
+    con.close()
+    from app.db import make_sessionmaker
+    maker = make_sessionmaker(str(tmp_path))
+    with maker() as s:
+        s.execute(text("SELECT cards_json FROM turns"))  # 列不存在会抛 OperationalError
