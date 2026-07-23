@@ -21,6 +21,26 @@ export default function Phone() {
     fetch('/api/phone/current-lesson').then(r => r.json()).then(setLesson).catch(() => {})
   }, [])
 
+  // 双通道联动：上课中后台轮询 /api/phone/next——孩子在平板上画完，服务器把
+  // 豆豆的下一句话入队，这里取到就自动播报+续气泡，不用家长再按说话。
+  // 服务端 clear-on-fetch 保证每句只给一次，无需前端去重。
+  useEffect(() => {
+    if (runId == null) return
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch('/api/phone/next')
+        if (!r.ok) return
+        const u = (await r.json()).utterance
+        if (u && u.text) {
+          historyRef.current.push(['（孩子在平板上画完了）', u.text])
+          setBubbles(b => [...b, { role: 'assistant', text: u.text }])
+          if (u.audio_url) new Audio(u.audio_url).play().catch(() => {})
+        }
+      } catch { /* 网络抖动：忽略，下轮再试 */ }
+    }, 1500)
+    return () => clearInterval(id)
+  }, [runId])
+
   const startLesson = async () => {
     setError('')
     try {
