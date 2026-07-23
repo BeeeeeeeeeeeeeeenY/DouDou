@@ -117,7 +117,13 @@ export default function Phone() {
           border: '1px solid #b7eb8f', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
           <span>📚 上课中：{runTitle}</span>
-          <button onClick={endLesson} style={{ border: 'none', background: 'transparent', color: '#999' }}>结束</button>
+          <span style={{ display: 'flex', alignItems: 'center' }}>
+            <button
+              onClick={() => { fetch('/api/phone/clear-board', { method: 'POST' }).catch(() => {}) }}
+              style={{ border: 'none', background: 'transparent', color: '#1677ff', marginRight: 12 }}
+            >清空画板</button>
+            <button onClick={endLesson} style={{ border: 'none', background: 'transparent', color: '#999' }}>结束</button>
+          </span>
         </div>
       )}
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 16px' }}>
