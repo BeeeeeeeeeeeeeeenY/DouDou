@@ -132,3 +132,22 @@ async def turn(req: TurnRequest, request: Request):
                                 "page_action": page_action, "memory_tags": tags}
                 db.commit()
     return resp
+
+
+@router.get("/turn/next")
+def turn_next(request: Request):
+    """平板空闲轮询：取当前房间（最近一个 running lesson_run）待办的演示/命令，
+    取用即清（clear-on-fetch，只生效一次）。无 running run → 全 null。"""
+    with request.app.state.sessionmaker() as db:
+        run = (db.query(LessonRun).filter(LessonRun.status == "running")
+               .order_by(LessonRun.id.desc()).first())
+        if run is None:
+            return {"demo": None, "command": None}
+        demo = None
+        if run.pending_demo:
+            demo = {"shape": run.pending_demo, "place": "blank_area", "pace": "slow"}
+            run.pending_demo = None
+        command = run.pending_command or None
+        run.pending_command = None
+        db.commit()
+        return {"demo": demo, "command": command}

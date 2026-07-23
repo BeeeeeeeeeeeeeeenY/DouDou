@@ -138,3 +138,35 @@ def test_legacy_turns_table_gains_cards_json_column(tmp_path):
     maker = make_sessionmaker(str(tmp_path))
     with maker() as s:
         s.execute(text("SELECT cards_json FROM turns"))  # 列不存在会抛 OperationalError
+
+
+def test_turn_next_returns_and_clears_pending_demo(client, db):
+    from app import models
+    _setup_course(client, db)
+    run = models.LessonRun(lesson_id=db.query(models.Lesson).first().id,
+                           status="running", pending_demo="circle")
+    db.add(run); db.commit()
+    j = client.get("/turn/next").json()
+    assert j["demo"] == {"shape": "circle", "place": "blank_area", "pace": "slow"}
+    assert j["command"] is None
+    # 取用即清：再请求得 null
+    assert client.get("/turn/next").json()["demo"] is None
+    # db 会话 expire_on_commit=False，run 对象不会自动感知端点另开会话所做的
+    # 提交，需显式 refresh 才能看到最新行数据。
+    db.refresh(run)
+    assert run.pending_demo is None
+
+
+def test_turn_next_returns_and_clears_command(client, db):
+    from app import models
+    _setup_course(client, db)
+    run = models.LessonRun(lesson_id=db.query(models.Lesson).first().id,
+                           status="running", pending_command="clear")
+    db.add(run); db.commit()
+    j = client.get("/turn/next").json()
+    assert j["command"] == "clear"
+    assert client.get("/turn/next").json()["command"] is None
+
+
+def test_turn_next_no_running_run_is_empty(client, db):
+    assert client.get("/turn/next").json() == {"demo": None, "command": None}
