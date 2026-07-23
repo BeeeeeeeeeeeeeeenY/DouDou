@@ -27,6 +27,12 @@ def test_seed_scripts_are_complete(client, db):
         assert l.segments[3]["channel"] == "tablet"         # 第④环节走平板
         # 未开画不收尾护栏：孩子还没在平板上提交画作前，绝不收尾/打标
         assert "还没在平板上画" in l.script_text
+    # 第 3 课「圆圆的朋友」带 demo 触发指令；其余课不带
+    l3 = next(x for x in lessons if x.slug == "shapes-01-03")
+    assert "⟦demo:circle⟧" in l3.script_text
+    for l in lessons:
+        if l.slug != "shapes-01-03":
+            assert "⟦demo:circle⟧" not in l.script_text
 
 
 def test_seed_idempotent(client, db):
