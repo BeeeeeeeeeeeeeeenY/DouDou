@@ -119,3 +119,7 @@ class LessonRun(Base):
     parent_note: Mapped[str] = mapped_column(Text, default="")
     pending_demo: Mapped[str | None] = mapped_column(String(20), nullable=True)      # 房间待演示形状，取用即清
     pending_command: Mapped[str | None] = mapped_column(String(20), nullable=True)   # 房间待执行命令（如 clear），取用即清
+    demoed_shapes: Mapped[list | None] = mapped_column(JSON, nullable=True)          # 本 run 已演示过的形状，去重用
+    pending_utterance: Mapped[dict | None] = mapped_column(JSON, nullable=True)      # 待手机播报 {text, audio_url}
+    tablet_turns: Mapped[int] = mapped_column(default=0)                             # 本 run 平板提交计数（图节流）
+    last_image_turn: Mapped[int] = mapped_column(default=0)                          # 上次出图时的 tablet_turns

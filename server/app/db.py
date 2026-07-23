@@ -22,6 +22,10 @@ def _migrate(engine) -> None:
     _ensure_column(engine, "profiles", "web_search", "web_search BOOLEAN DEFAULT 0")
     _ensure_column(engine, "lesson_runs", "pending_demo", "pending_demo VARCHAR(20)")
     _ensure_column(engine, "lesson_runs", "pending_command", "pending_command VARCHAR(20)")
+    _ensure_column(engine, "lesson_runs", "demoed_shapes", "demoed_shapes JSON")
+    _ensure_column(engine, "lesson_runs", "pending_utterance", "pending_utterance JSON")
+    _ensure_column(engine, "lesson_runs", "tablet_turns", "tablet_turns INTEGER DEFAULT 0")
+    _ensure_column(engine, "lesson_runs", "last_image_turn", "last_image_turn INTEGER DEFAULT 0")
 
 
 def make_sessionmaker(data_dir: str):

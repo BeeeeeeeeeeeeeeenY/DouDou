@@ -74,3 +74,32 @@ def test_lesson_run_pending_fields_default_none_and_settable(db):
     db.expire_all()
     got = db.get(models.LessonRun, run.id)
     assert got.pending_demo == "circle" and got.pending_command == "clear"
+
+
+def test_lesson_run_redesign_state_columns_default_and_settable(db):
+    from app import models
+    lesson = db.query(models.Lesson).first()
+    if lesson is None:
+        cur = models.Curriculum(slug="t2", title="t2")
+        db.add(cur); db.flush()
+        lesson = models.Lesson(curriculum_id=cur.id, seq=1, slug="t2-1", title="t2")
+        db.add(lesson); db.flush()
+    run = models.LessonRun(lesson_id=lesson.id)
+    db.add(run); db.commit()
+    # Test defaults
+    assert run.demoed_shapes is None
+    assert run.pending_utterance is None
+    assert run.tablet_turns == 0
+    assert run.last_image_turn == 0
+    # Set values
+    run.demoed_shapes = ["circle"]
+    run.pending_utterance = {"text": "hi"}
+    run.tablet_turns = 2
+    run.last_image_turn = 1
+    db.commit()
+    db.expire_all()
+    got = db.get(models.LessonRun, run.id)
+    assert got.demoed_shapes == ["circle"]
+    assert got.pending_utterance == {"text": "hi"}
+    assert got.tablet_turns == 2
+    assert got.last_image_turn == 1
