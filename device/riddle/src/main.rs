@@ -201,6 +201,15 @@ fn main() {
         Some("--color-test") => {
             std::process::exit(color_test(&args));
         }
+        // Spike (Demo Plan 2, Task 3): synthesize a multi-band colour PNG,
+        // run it through the real cards::Card::Image -> cardrender::plan_image
+        // decode/layout path, then paste_rect + swap_raw(mode 5) it onto the
+        // real takeover display. A human watches the panel to confirm colour
+        // survives the mode-5 waveform. Needs the takeover backend +
+        // xochitl stopped.
+        Some("--image-test") => {
+            std::process::exit(image_test(&args));
+        }
         Some("--version" | "-V") => {
             println!("riddle {}", env!("CARGO_PKG_VERSION"));
             return;
@@ -287,6 +296,69 @@ fn color_test(args: &[String]) -> i32 {
             std::thread::sleep(std::time::Duration::from_secs(hold));
         }
     }
+}
+
+/// Demo Plan 2 Task 3 diagnostic: synthesize a multi-band colour PNG, wrap it
+/// in a synthetic `/turn` response as an `image` card, then run it through
+/// the REAL parse -> plan_card (-> plan_image) -> paste_rect -> swap_raw(mode
+/// 5) path onto the takeover display. Unlike `--color-test` (which paints
+/// raw bands directly), this exercises the actual image-card rendering
+/// primitive end to end. A human watches the panel; red/green/blue/yellow
+/// bands should be distinguishable after the mode-5 swap.
+fn image_test(_args: &[String]) -> i32 {
+    use base64::Engine;
+    let (w, h) = (600u32, 400u32);
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().unwrap();
+        let bands = [[255u8, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 0, 255]];
+        let mut data = Vec::with_capacity((w * h * 4) as usize);
+        for row in 0..h {
+            let c = bands[(row as usize * bands.len() / h as usize).min(bands.len() - 1)];
+            for _ in 0..w {
+                data.extend_from_slice(&c);
+            }
+        }
+        writer.write_image_data(&data).unwrap();
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+    let json = format!(
+        r#"{{"turn_id":"t","spoken_text":"","paper_cards":[{{"type":"image","data":"{b64}","place":"blank_area","size":"l"}}],"page_action":"none","memory_tags":[]}}"#
+    );
+    let resp = match cards::parse_turn_response(&json) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("image-test: {e}");
+            return 1;
+        }
+    };
+    let (disp, mut surf) = match display::Display::open() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("image-test: display open failed: {e} (needs takeover + xochitl stopped)");
+            return 1;
+        }
+    };
+    surf.fill_rect(0, 0, surf.w, surf.h, WHITE);
+    let mut map = layout::InkMap::from_surface(&surf);
+    let primary = FontRef::try_from_slice(FONT_TTF).expect("font");
+    let font = script::FontStack::new(primary, None);
+    for card in &resp.paper_cards {
+        for p in cardrender::plan_card(card, &mut map, &font, (surf.w as i32 / 2, surf.h as i32 / 2)) {
+            if let Some(blit) = &p.blit {
+                let (x, y, bw, bh) = blit.rect;
+                surf.paste_rect(x as usize, y as usize, bw as usize, bh as usize, &blit.bgra);
+                eprintln!(">>> WATCH — image blit {bw}x{bh} at ({x},{y}), swapping at mode 5");
+                disp.swap_raw(x, y, bw, bh, 5, 0);
+            }
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_secs(20));
+    eprintln!("image-test: done (xochitl auto-restored on exit)");
+    0
 }
 
 fn oracle_test(png: &str) -> i32 {
@@ -411,6 +483,11 @@ fn cards_test(args: &[String]) -> i32 {
                 if let Some(&(x, y)) = stroke.first() {
                     surf.stamp(x, y, 2, p.color);
                 }
+            }
+            if let Some(blit) = &p.blit {
+                let (x, y, w, h) = blit.rect;
+                surf.paste_rect(x as usize, y as usize, w as usize, h as usize, &blit.bgra);
+                eprintln!("image blit at ({x},{y}) {w}x{h}");
             }
             // plan_card already marked this plan's region on `map` (via its
             // internal commit()); no need to mark_rect again here.
@@ -1227,38 +1304,59 @@ fn run() -> std::io::Result<()> {
                 if Instant::now() >= next {
                     let mut dirty = BBox::empty();
                     if plan_i < plans.len() {
-                        // Budget and color both come from the CURRENT plan:
-                        // a slow sketch and a normal-paced stamp don't share
-                        // a pace, and grid/template sub-plans of the same
-                        // trace card don't share a color (FADED vs BLACK).
-                        let mut budget = plans[plan_i].points_per_frame;
-                        let color = plans[plan_i].color;
-                        // Mirrors Replying's stroke-walking loop, but each
-                        // plan's own inner stroke list is drained from the
-                        // front as it finishes (`strokes.remove(0)`) instead
-                        // of tracking a separate stroke index — plan_i/point_i
-                        // are the only position fields DrawingCards carries.
-                        while budget > 0 && !plans[plan_i].strokes.is_empty() {
-                            let stroke_len = plans[plan_i].strokes[0].len();
-                            if point_i >= stroke_len {
-                                plans[plan_i].strokes.remove(0);
-                                point_i = 0;
-                                continue;
-                            }
-                            let (x, y) = plans[plan_i].strokes[0][point_i];
-                            if point_i > 0 {
-                                let (px, py) = plans[plan_i].strokes[0][point_i - 1];
-                                surf.brush_line(px, py, x, y, 2, color);
+                        // 位图卡：一次性贴 BGRA + mode 5 刷，不做逐帧动画 —
+                        // 有 blit 的 plan 从不带 strokes（见 plan_image），所以
+                        // 必须在进入下面的逐点动画之前单独分支处理，否则会被
+                        // strokes.is_empty() 直接跳过、图从不上屏。
+                        if let Some(blit) = plans[plan_i].blit.clone() {
+                            let (x, y, w, h) = blit.rect;
+                            if surf.fmt == surface::PixFmt::Rgb32 {
+                                surf.paste_rect(x as usize, y as usize, w as usize, h as usize, &blit.bgra);
+                                disp.swap_raw(x, y, w, h, 5, 0);
                             } else {
-                                surf.stamp(x, y, 2, color);
+                                // qtfb 是 Rgb565：直接贴 BGRA 会错色，跳过（Demo 走 takeover）。
+                                eprintln!(
+                                    "riddle: DrawingCards: qtfb (Rgb565) surface can't take a BGRA image blit, skipping"
+                                );
                             }
-                            dirty.add(x, y, 4);
-                            point_i += 1;
-                            budget -= 1;
-                        }
-                        if plans[plan_i].strokes.is_empty() {
+                            // 复用该 handler 现有的"一张 plan 画完→推进"路径：
+                            // 与下面 strokes.is_empty() 分支完全同构，勿另造状态机。
                             plan_i += 1;
                             point_i = 0;
+                        } else {
+                            // Budget and color both come from the CURRENT plan:
+                            // a slow sketch and a normal-paced stamp don't share
+                            // a pace, and grid/template sub-plans of the same
+                            // trace card don't share a color (FADED vs BLACK).
+                            let mut budget = plans[plan_i].points_per_frame;
+                            let color = plans[plan_i].color;
+                            // Mirrors Replying's stroke-walking loop, but each
+                            // plan's own inner stroke list is drained from the
+                            // front as it finishes (`strokes.remove(0)`) instead
+                            // of tracking a separate stroke index — plan_i/point_i
+                            // are the only position fields DrawingCards carries.
+                            while budget > 0 && !plans[plan_i].strokes.is_empty() {
+                                let stroke_len = plans[plan_i].strokes[0].len();
+                                if point_i >= stroke_len {
+                                    plans[plan_i].strokes.remove(0);
+                                    point_i = 0;
+                                    continue;
+                                }
+                                let (x, y) = plans[plan_i].strokes[0][point_i];
+                                if point_i > 0 {
+                                    let (px, py) = plans[plan_i].strokes[0][point_i - 1];
+                                    surf.brush_line(px, py, x, y, 2, color);
+                                } else {
+                                    surf.stamp(x, y, 2, color);
+                                }
+                                dirty.add(x, y, 4);
+                                point_i += 1;
+                                budget -= 1;
+                            }
+                            if plans[plan_i].strokes.is_empty() {
+                                plan_i += 1;
+                                point_i = 0;
+                            }
                         }
                     }
                     if !dirty.is_empty() {
@@ -1585,5 +1683,47 @@ mod tests {
         assert_eq!(page_full_threshold_from(Some("abc")), 0.55);
         assert_eq!(page_full_threshold_from(Some("1.5")), 0.55); // 超出 0..=1，回退
         assert_eq!(page_full_threshold_from(Some("0")), 0.0); // 0 是合法值：关闭自动换页
+    }
+
+    // Demo Plan 2 Task 3: prove an `image` card fixture is legal end to
+    // end — not just cards::parse_turn_response (already covered in
+    // cards.rs), but through cardrender::plan_card too, since Task 3's job
+    // is wiring the resulting blit into the real render paths.
+    #[test]
+    fn image_card_fixture_parses_and_plans_a_blit() {
+        use base64::Engine;
+        let mut png_bytes = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png_bytes, 4, 4);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut writer = enc.write_header().unwrap();
+            let data: Vec<u8> = (0..(4 * 4)).flat_map(|_| [255u8, 0, 0, 255]).collect();
+            writer.write_image_data(&data).unwrap();
+        }
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+        let json = format!(
+            r#"{{"turn_id":"t","spoken_text":"","paper_cards":[{{"type":"image","data":"{b64}","place":"blank_area","size":"l"}}],"page_action":"none","memory_tags":[]}}"#
+        );
+        let resp = cards::parse_turn_response(&json).expect("parses");
+        assert_eq!(resp.paper_cards.len(), 1);
+        assert!(matches!(&resp.paper_cards[0], cards::Card::Image { .. }));
+
+        let mut buf = vec![0u8; SCREEN_W * SCREEN_H * 4];
+        let mut surf =
+            Surface::new(buf.as_mut_ptr(), buf.len(), SCREEN_W, SCREEN_H, SCREEN_W * 4, surface::PixFmt::Rgb32);
+        surf.fill_rect(0, 0, SCREEN_W, SCREEN_H, WHITE);
+        let mut map = layout::InkMap::from_surface(&surf);
+        let font = script::FontStack::new(FontRef::try_from_slice(FONT_TTF).expect("font"), None);
+        let plans = cardrender::plan_card(
+            &resp.paper_cards[0],
+            &mut map,
+            &font,
+            (SCREEN_W as i32 / 2, SCREEN_H as i32 / 2),
+        );
+        assert_eq!(plans.len(), 1, "one blit plan");
+        let blit = plans[0].blit.as_ref().expect("blit present");
+        let (_, _, w, h) = blit.rect;
+        assert_eq!(blit.bgra.len(), (w * h * 4) as usize);
     }
 }

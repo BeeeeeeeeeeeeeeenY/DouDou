@@ -1,0 +1,13 @@
+{
+  "response": {
+    "turn_id": "t",
+    "spoken_text": "",
+    "paper_cards": [
+      { "type": "image", "data": "iVBORw0KGgoAAAANSUhEUgAAACgAAAAeCAYAAABe3VzdAAAAqUlEQVR4nN2XwQ3DMAwDWaLoBtnVG1TTdZFs0E/yyStAC4hKbML3tUXRTCDYj/dn3WAMYQ5hDmEOYc7zCpH2XX6uxWsdZ7D9MXbeoxrlneYq+0sG1WZNqGMvc2o9e5pTdOzHDHunl9WbJ8FREOYQ5hDmELMYjOKtRNWbJ8ErU4yETjrBqslI1kufWDUZQp38D2abhXio0pU/jqa2b5K7RtC8Y2YEHNI1wQ7/8C78oTH/WwAAAABJRU5ErkJggg==", "place": "blank_area", "size": "l" },
+      { "type": "text", "content": "太阳", "place": "near_anchor", "anchor_norm": [0.5, 0.4] }
+    ],
+    "page_action": "none",
+    "memory_tags": []
+  },
+  "ink": [[[300, 400], [500, 600]]]
+}
