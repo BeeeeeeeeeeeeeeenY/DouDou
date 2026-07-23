@@ -210,6 +210,13 @@ fn main() {
         Some("--image-test") => {
             std::process::exit(image_test(&args));
         }
+        // Colour calibration: paint a 6-family x 5-candidate RGB swatch grid at
+        // full 8-bit (paste_rect, not the 565 fill_rect) and swap at mode 5, so
+        // a human can photograph which RGB the panel actually renders as a clean
+        // target colour. Rows top->bottom: red, orange, yellow, green, blue, pink.
+        Some("--swatch-test") => {
+            std::process::exit(swatch_test(&args));
+        }
         Some("--version" | "-V") => {
             println!("riddle {}", env!("CARGO_PKG_VERSION"));
             return;
@@ -358,6 +365,59 @@ fn image_test(_args: &[String]) -> i32 {
     }
     std::thread::sleep(std::time::Duration::from_secs(20));
     eprintln!("image-test: done (xochitl auto-restored on exit)");
+    0
+}
+
+/// Colour-calibration swatch grid (see dispatch comment). 6 rows (red, orange,
+/// yellow, green, blue, pink), 5 candidate RGBs per row, painted full 8-bit via
+/// paste_rect + swap_raw(mode 5). Logs every cell's rgb so a photo of the panel
+/// can be mapped back to source values.
+fn swatch_test(_args: &[String]) -> i32 {
+    let palette: [[(u8, u8, u8); 5]; 6] = [
+        [(200, 30, 30), (230, 45, 40), (255, 60, 50), (255, 95, 65), (240, 120, 95)], // red
+        [(240, 110, 20), (255, 140, 25), (255, 160, 45), (255, 180, 70), (250, 150, 60)], // orange
+        [(230, 190, 20), (245, 210, 20), (255, 225, 20), (255, 235, 80), (250, 220, 120)], // yellow
+        [(30, 140, 60), (45, 175, 75), (55, 205, 90), (95, 215, 120), (135, 225, 150)], // green
+        [(30, 60, 180), (30, 95, 220), (40, 125, 240), (65, 145, 255), (95, 165, 255)], // blue
+        [(220, 55, 115), (240, 80, 150), (255, 100, 175), (255, 130, 195), (230, 45, 105)], // pink
+    ];
+    let names = ["red", "orange", "yellow", "green", "blue", "pink"];
+    let (rows, cols) = (6usize, 5usize);
+    let (sw, sh, gap) = (170usize, 90usize, 18usize);
+    let gw = cols * sw + (cols + 1) * gap;
+    let gh = rows * sh + (rows + 1) * gap;
+    let mut bgra = vec![255u8; gw * gh * 4]; // white canvas
+    for r in 0..rows {
+        for c in 0..cols {
+            let (cr, cg, cb) = palette[r][c];
+            eprintln!("swatch r{r}c{c} {} = rgb({cr},{cg},{cb})", names[r]);
+            let (x0, y0) = (gap + c * (sw + gap), gap + r * (sh + gap));
+            for y in y0..y0 + sh {
+                for x in x0..x0 + sw {
+                    let i = (y * gw + x) * 4;
+                    bgra[i] = cb;
+                    bgra[i + 1] = cg;
+                    bgra[i + 2] = cr;
+                    bgra[i + 3] = 0xFF;
+                }
+            }
+        }
+    }
+    let (disp, mut surf) = match display::Display::open() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("swatch-test: display open failed: {e} (needs takeover + xochitl stopped)");
+            return 1;
+        }
+    };
+    surf.fill_rect(0, 0, surf.w, surf.h, WHITE);
+    let gx = surf.w.saturating_sub(gw) / 2;
+    let gy = 300usize;
+    surf.paste_rect(gx, gy, gw, gh, &bgra);
+    eprintln!(">>> WATCH — {rows}x{cols} swatch grid at ({gx},{gy}) {gw}x{gh}, mode 5");
+    disp.swap_raw(gx as i32, gy as i32, gw as i32, gh as i32, 5, 0);
+    std::thread::sleep(std::time::Duration::from_secs(45));
+    eprintln!("swatch-test: done");
     0
 }
 
