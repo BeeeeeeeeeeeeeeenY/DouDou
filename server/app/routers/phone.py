@@ -38,19 +38,41 @@ def current_lesson(db: Session = Depends(get_db)):
 
 
 @router.post("/lesson-runs")
-def start_lesson_run(db: Session = Depends(get_db)):
-    found = _active_current_lesson(db)
-    if found is None:
-        raise HTTPException(400, "请先在 DouDou 后台设置生效课程与当前课时")
-    _, lesson = found
-    for stale in db.query(LessonRun).filter(LessonRun.status == "running").all():
-        stale.status = "abandoned"
-        stale.ended_at = utcnow()
-        # 遗留 running 仅置 abandoned、不挂靠作品：跨天的失联窗口会误挂无关涂鸦
-    run = LessonRun(lesson_id=lesson.id)
-    db.add(run)
-    db.commit()
-    return {"lesson_run_id": run.id, "lesson_seq": lesson.seq, "lesson_title": lesson.title}
+async def start_lesson_run(request: Request):
+    with request.app.state.sessionmaker() as db:  # type: Session
+        found = _active_current_lesson(db)
+        if found is None:
+            raise HTTPException(400, "请先在 DouDou 后台设置生效课程与当前课时")
+        _, lesson = found
+        for stale in db.query(LessonRun).filter(LessonRun.status == "running").all():
+            stale.status = "abandoned"
+            stale.ended_at = utcnow()
+            # 遗留 running 仅置 abandoned、不挂靠作品：跨天的失联窗口会误挂无关涂鸦
+        run = LessonRun(lesson_id=lesson.id)
+        db.add(run)
+        db.commit()
+        run_id, seq, title = run.id, lesson.seq, lesson.title
+
+    # 豆豆开课先开口：固定暖句 + TTS（不走 LLM，快且稳，无 599 风险）。
+    # TTS 失败不阻塞开课——greeting_audio_url 留空，前端仍显示文字开场。
+    greeting = f"嗨，我是豆豆！今天我们一起玩《{title}》，想画什么就画什么，好不好呀？"
+    greeting_url = ""
+    with request.app.state.sessionmaker() as db:  # type: Session
+        try:
+            _, tts_cfg = load_voice_config(db)
+            audio_bytes = await synthesize(tts_cfg["base_url"], tts_cfg["api_key"],
+                                           tts_cfg["model"], tts_cfg["voice"],
+                                           greeting, tts_cfg["speed"])
+            rel = f"audio/{uuid.uuid4().hex}.mp3"
+            with open(f"{request.app.state.data_dir}/{rel}", "wb") as f:
+                f.write(audio_bytes)
+            greeting_url = f"/api/files/{rel}"
+        except Exception as e:
+            # 开场白 TTS 失败绝不阻塞开课：留空 url，前端仍显示文字开场。
+            print(f"phone: greeting TTS failed, starting lesson without audio: {e}")
+            greeting_url = ""
+    return {"lesson_run_id": run_id, "lesson_seq": seq, "lesson_title": title,
+            "greeting_text": greeting, "greeting_audio_url": greeting_url}
 
 
 @router.post("/lesson-runs/{run_id}/end")

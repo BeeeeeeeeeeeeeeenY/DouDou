@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import AsyncIterator
 
@@ -59,18 +60,28 @@ async def _attempt(base_url: str, api_key: str, body: dict) -> AsyncIterator[str
 async def stream_chat(base_url: str, api_key: str, body: dict) -> AsyncIterator[str]:
     """流式调用 OpenAI 兼容 /chat/completions，逐段 yield delta 文本。
 
-    reasoning 模型（o 系列）不接受 max_tokens：上游返回 400 且报文提示
-    max_completion_tokens 时，把该字段换名重试一次（与 riddle 原直连行为一致）。
-    400 发生在任何 yield 之前（headers 一到就检查状态码），重试是安全的。
+    两种重试：
+    - reasoning 模型（o 系列）不接受 max_tokens：上游返回 400 且报文提示
+      max_completion_tokens 时，把该字段换名重试一次（与 riddle 原直连行为一致）。
+    - 瞬时传输错误（599：连接/超时 blip）：**仅在还没吐出任何 delta 时**重试一次，
+      短暂退避后重连——流中途失败不重试（否则会重复已输出的内容）。
     """
-    try:
-        async for delta in _attempt(base_url, api_key, body):
-            yield delta
-    except UpstreamError as e:
-        if e.status_code == 400 and "max_completion_tokens" in e.detail and "max_tokens" in body:
-            retry = {k: v for k, v in body.items() if k != "max_tokens"}
-            retry["max_completion_tokens"] = body["max_tokens"]
-            async for delta in _attempt(base_url, api_key, retry):
+    for transient_attempt in range(2):
+        yielded = False
+        try:
+            async for delta in _attempt(base_url, api_key, body):
+                yielded = True
                 yield delta
-        else:
+            return
+        except UpstreamError as e:
+            if e.status_code == 400 and "max_completion_tokens" in e.detail and "max_tokens" in body:
+                retry = {k: v for k, v in body.items() if k != "max_tokens"}
+                retry["max_completion_tokens"] = body["max_tokens"]
+                async for delta in _attempt(base_url, api_key, retry):
+                    yield delta
+                return
+            # 连接阶段的瞬时传输错误：还没输出就失败，重连一次是安全的。
+            if e.status_code == 599 and not yielded and transient_attempt == 0:
+                await asyncio.sleep(0.6)
+                continue
             raise

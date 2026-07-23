@@ -104,3 +104,27 @@ async def test_stream_chat_skips_odd_shaped_payloads():
     )
     chunks = [c async for c in stream_chat("https://api.test/v1", "sk-x", build_chat_body("m", []))]
     assert chunks == ["好"]
+
+
+@respx.mock
+async def test_stream_chat_retries_once_on_transient_transport_error():
+    # 第一次连接失败（瞬时 blip），第二次成功 → 重试后拿到完整内容。
+    route = respx.post("https://up.test/v1/chat/completions").mock(
+        side_effect=[httpx.ConnectError("boom"), httpx.Response(200, text=SSE)]
+    )
+    got = "".join(
+        [d async for d in stream_chat("https://up.test/v1", "sk", build_chat_body("m", []))]
+    )
+    assert got == "你好，小朋友"
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_stream_chat_gives_up_after_second_transport_error():
+    respx.post("https://up.test/v1/chat/completions").mock(
+        side_effect=[httpx.ConnectError("boom"), httpx.ConnectError("boom2")]
+    )
+    with pytest.raises(UpstreamError) as ei:
+        async for _ in stream_chat("https://up.test/v1", "sk", build_chat_body("m", [])):
+            pass
+    assert ei.value.status_code == 599

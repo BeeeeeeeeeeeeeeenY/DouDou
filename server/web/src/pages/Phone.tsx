@@ -30,7 +30,11 @@ export default function Phone() {
       setRunId(j.lesson_run_id)
       setRunTitle(`第 ${j.lesson_seq} 课 · ${j.lesson_title}`)
       historyRef.current = []
-      setBubbles([{ role: 'system', text: `开始上课：第 ${j.lesson_seq} 课《${j.lesson_title}》。按住下面的按钮，让孩子跟豆豆打个招呼吧！` }])
+      const opening: Bubble[] = [{ role: 'system', text: `开始上课：第 ${j.lesson_seq} 课《${j.lesson_title}》` }]
+      if (j.greeting_text) opening.push({ role: 'assistant', text: j.greeting_text })
+      setBubbles(opening)
+      // 豆豆开课先开口（固定暖句 + TTS），孩子再按住说话回应
+      if (j.greeting_audio_url) new Audio(j.greeting_audio_url).play().catch(() => {})
     } catch (e) { setError(String(e)) }
   }
 
