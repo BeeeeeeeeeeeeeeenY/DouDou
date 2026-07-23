@@ -635,6 +635,28 @@ fn turn_the_page(
     user_ink.clear();
     *committed_strokes = 0;
     *page_id = unix_secs();
+    draw_lesson_badge(surf, disp); // 翻页清屏后重画上课徽标
+}
+
+/// A small badge pinned to the top edge, shown ONLY in /turn (lesson) mode, so
+/// the user can tell at a glance that DouDou lesson mode is live (vs the legacy
+/// diary). No-op outside turn mode. Redrawn after every page turn (the sheet
+/// clear would otherwise wipe it).
+fn draw_lesson_badge(surf: &mut Surface, disp: &display::Display) {
+    if !turn::turn_mode_enabled() {
+        return;
+    }
+    let (w, h) = (188usize, 34usize);
+    let x = SCREEN_W / 2 - w / 2;
+    let y = 8usize;
+    surf.fill_rect(x, y, w, h, BLACK); // 外框
+    surf.fill_rect(x + 3, y + 3, w - 6, h - 6, WHITE); // 白底标签
+    // 左侧填一个实心小方当图标，右侧留白区画三条短杠（书页/上课的意象）。
+    surf.fill_rect(x + 9, y + 9, h - 18 + 8, h - 18 + 8, BLACK);
+    for i in 0..3 {
+        surf.fill_rect(x + 52, y + 11 + i * 6, w - 66, 3, BLACK);
+    }
+    disp.update(x as i32, y as i32, w as i32, h as i32, false);
 }
 
 /// Gate for `turn_the_page`, called from both completion sites (legacy
@@ -774,6 +796,7 @@ fn run() -> std::io::Result<()> {
     let flush_every = if takeover { Duration::from_millis(8) } else { Duration::from_millis(35) };
 
     eprintln!("riddle: the diary is open");
+    draw_lesson_badge(&mut surf, &disp); // 上课模式：顶部徽标标示已生效
 
     loop {
         if sigterm.load(Ordering::Relaxed) {
