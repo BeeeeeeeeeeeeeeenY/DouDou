@@ -8,7 +8,7 @@ from app.engine.errors import ConfigError
 from app.engine.lesson import active_current_lesson, latest_recap, render_lesson_script
 from app.engine.turn import TurnInput, TurnRunner
 from app.engine.upstream import UpstreamError
-from app.models import Turn
+from app.models import LessonRun, Turn
 
 router = APIRouter()
 
@@ -58,6 +58,7 @@ async def turn(req: TurnRequest, request: Request):
             image_png = None
 
     lesson_context = ""
+    active_run_id: int | None = None
     recent_replies: list[str] = []
     recent_voice: list[str] = []
     with request.app.state.sessionmaker() as db:
@@ -66,21 +67,28 @@ async def turn(req: TurnRequest, request: Request):
             _curriculum, lesson = found
             lesson_context = render_lesson_script(
                 lesson.script_text, latest_recap(db, lesson.curriculum_id))
-        # 最近几轮 tablet 回复：注入"别重复"上下文（/turn 本身无状态，
-        # 否则模型看不到自己已经说过/画过什么，会一直重复同一主题）。
-        rows = (db.query(Turn).filter(Turn.source == "tablet")
-                .order_by(Turn.id.desc()).limit(4).all())
-        for r in reversed(rows):
-            cj = r.cards_json if isinstance(r.cards_json, dict) else {}
-            sp = cj.get("spoken_text")
-            if sp:
-                recent_replies.append(sp)
-        # 最近的语音对话：让平板豆豆知道手机上正在聊什么（一个豆豆，画面呼应对话）。
-        prows = (db.query(Turn).filter(Turn.source == "phone", Turn.transcript.isnot(None))
-                 .order_by(Turn.id.desc()).limit(3).all())
-        for r in reversed(prows):
-            if r.transcript:
-                recent_voice.append(f"孩子说「{r.transcript}」，你回「{(r.reply_text or '')[:40]}」")
+        # 当前"房间"= 正在进行的 lesson_run（手机开课时建）。平板这一轮归属该
+        # 房间，且只看本房间的历史——否则上一节课的脏数据会串进来（模型会把
+        # 上节课画的东西当成此刻画的）。没有进行中的房间就不注入跨轮上下文。
+        run = (db.query(LessonRun).filter(LessonRun.status == "running")
+               .order_by(LessonRun.id.desc()).first())
+        active_run_id = run.id if run is not None else None
+        if active_run_id is not None:
+            rows = (db.query(Turn)
+                    .filter(Turn.source == "tablet", Turn.lesson_run_id == active_run_id)
+                    .order_by(Turn.id.desc()).limit(4).all())
+            for r in reversed(rows):
+                cj = r.cards_json if isinstance(r.cards_json, dict) else {}
+                sp = cj.get("spoken_text")
+                if sp:
+                    recent_replies.append(sp)
+            prows = (db.query(Turn)
+                     .filter(Turn.source == "phone", Turn.lesson_run_id == active_run_id,
+                             Turn.transcript.isnot(None))
+                     .order_by(Turn.id.desc()).limit(3).all())
+            for r in reversed(prows):
+                if r.transcript:
+                    recent_voice.append(f"孩子说「{r.transcript}」，你回「{(r.reply_text or '')[:40]}」")
 
     user_text = TURN_USER_TEXT
     if recent_voice:
@@ -97,6 +105,7 @@ async def turn(req: TurnRequest, request: Request):
         image_png=image_png,
         device_protocol_suffix=cards_engine.CARD_PROTOCOL,
         lesson_context=lesson_context,
+        lesson_run_id=active_run_id,  # 平板这一轮加入当前房间
     )
     runner = TurnRunner(request.app.state.sessionmaker, request.app.state.data_dir, tin)
     try:
