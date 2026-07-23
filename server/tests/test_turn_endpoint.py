@@ -7,6 +7,12 @@ import respx
 from app import models
 
 
+def _tts_route(**over):
+    kwargs = {"return_value": httpx.Response(200, content=b"MP3")}
+    kwargs.update(over)
+    return respx.post("https://up.test/v1/audio/speech").mock(**kwargs)
+
+
 def _min_body(**over):
     body = {
         "turn_id": "t-1",
@@ -224,3 +230,37 @@ def test_turn_throttles_images(client, db):
     assert has_image(r1), "first submission should be allowed through"
     assert not has_image(r2), "second submission within throttle window should be dropped"
     assert not has_image(r3), "third submission within throttle window should be dropped"
+
+
+@respx.mock
+def test_turn_queues_phone_utterance(client, db):
+    """有 running lesson 时，/turn 的 spoken_text 应合成 TTS 并挂到
+    run.pending_utterance，供手机轮询播报（两屏分离：平板只看画）。"""
+    _setup_course(client, db)
+    from app import models
+    provider = db.query(models.Provider).filter(models.Provider.name == "up").one()
+    client.put("/api/admin/voice-settings", json={
+        "stt_provider_id": provider.id, "stt_model": "whisper-1",
+        "tts_provider_id": provider.id, "tts_model": "tts-1", "tts_voice": "alloy",
+    })
+    run = models.LessonRun(lesson_id=db.query(models.Lesson).first().id, status="running")
+    db.add(run)
+    db.commit()
+    run_id = run.id
+
+    reply = json.dumps({
+        "spoken_text": "圆圆的气球真好看",
+        "paper_cards": [{"type": "stamp", "name": "star", "count": 1, "place": "near_new_ink"}],
+        "page_action": "none", "memory_tags": [],
+    }, ensure_ascii=False)
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=_sse(reply)))
+    _tts_route()
+
+    r = client.post("/turn", json=_min_body())
+    assert r.status_code == 200
+
+    db.refresh(run)
+    assert run.pending_utterance
+    assert "气球" in run.pending_utterance["text"]
+    assert "audio_url" in run.pending_utterance

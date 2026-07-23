@@ -338,3 +338,24 @@ def test_demo_fires_once_per_run(client, db):
     run2 = db.get(models.LessonRun, run_id)
     assert run2.pending_demo is None, f"After second turn, pending_demo should remain None, got {run2.pending_demo}"
     assert run2.demoed_shapes == ["circle"], f"After second turn, demoed_shapes should remain ['circle'], got {run2.demoed_shapes}"
+
+
+def test_phone_next_serves_and_clears(client, db):
+    setup_course(client)
+    run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
+    run = db.get(models.LessonRun, run_id)
+    run.pending_utterance = {"text": "下一步", "audio_url": "/x.mp3"}
+    db.commit()
+
+    j = client.get("/api/phone/next").json()
+    assert j["utterance"] == {"text": "下一步", "audio_url": "/x.mp3"}
+
+    j2 = client.get("/api/phone/next").json()
+    assert j2["utterance"] is None
+
+    db.refresh(run)
+    assert run.pending_utterance is None
+
+
+def test_phone_next_no_running_run_is_empty(client, db):
+    assert client.get("/api/phone/next").json() == {"utterance": None}

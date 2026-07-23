@@ -89,6 +89,20 @@ def end_lesson_run(run_id: int, db: Session = Depends(get_db)):
     return {"ok": True, "status": run.status}
 
 
+@router.get("/next")
+def phone_next(db: Session = Depends(get_db)):
+    """手机轮询：取当前房间待播报的 DouDou 话（取用即清）。无 running run 或
+    无待播报 → null。"""
+    run = (db.query(LessonRun).filter(LessonRun.status == "running")
+           .order_by(LessonRun.id.desc()).first())
+    if run is None or not run.pending_utterance:
+        return {"utterance": None}
+    u = run.pending_utterance
+    run.pending_utterance = None
+    db.commit()
+    return {"utterance": u}
+
+
 @router.post("/clear-board")
 def clear_board(db: Session = Depends(get_db)):
     """手机「清空画板」按钮：给当前房间挂 clear 命令，平板轮询到即清屏。"""

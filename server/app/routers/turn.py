@@ -1,4 +1,5 @@
 import base64
+import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -6,9 +7,11 @@ from pydantic import BaseModel, Field
 from app.engine import cards as cards_engine
 from app.engine.errors import ConfigError
 from app.engine.lesson import active_current_lesson, latest_recap, render_lesson_script
+from app.engine.tts import synthesize
 from app.engine.turn import TurnInput, TurnRunner
 from app.engine.upstream import UpstreamError
 from app.models import LessonRun, Turn
+from app.routers.admin_voice import load_voice_config
 
 router = APIRouter()
 
@@ -137,6 +140,27 @@ async def turn(req: TurnRequest, request: Request):
                     run.last_image_turn = run.tablet_turns
                 elif has_img:
                     cards = [c for c in cards if c.get("type") != "image"]
+                db.commit()
+    # 豆豆的话不再上平板卡片，而是入队给手机播报（两屏分离：平板只看画）。
+    # TTS 失败绝不阻塞 /turn 响应——手机侧可只显示文字。
+    if active_run_id is not None and spoken:
+        with request.app.state.sessionmaker() as db:
+            run = db.get(LessonRun, active_run_id)
+            if run is not None:
+                audio_url = ""
+                try:
+                    _, tts_cfg = load_voice_config(db)
+                    audio_bytes = await synthesize(
+                        tts_cfg["base_url"], tts_cfg["api_key"], tts_cfg["model"],
+                        tts_cfg["voice"], spoken, tts_cfg["speed"])
+                    rel = f"audio/{uuid.uuid4().hex}.mp3"
+                    with open(f"{request.app.state.data_dir}/{rel}", "wb") as f:
+                        f.write(audio_bytes)
+                    audio_url = f"/api/files/{rel}"
+                except Exception as e:
+                    print(f"turn: utterance TTS failed, queueing text only: {e}")
+                    audio_url = ""
+                run.pending_utterance = {"text": spoken, "audio_url": audio_url}
                 db.commit()
     resp = _response(req.turn_id, spoken, cards, page_action, tags)
     if runner.turn_id is not None:
