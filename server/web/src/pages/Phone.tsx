@@ -16,6 +16,8 @@ export default function Phone() {
   const historyRef = useRef<[string, string][]>([])
   const runRef = useRef<number | null>(null)
   runRef.current = runId
+  const stateRef = useRef(state)
+  stateRef.current = state
 
   useEffect(() => {
     fetch('/api/phone/current-lesson').then(r => r.json()).then(setLesson).catch(() => {})
@@ -27,6 +29,9 @@ export default function Phone() {
   useEffect(() => {
     if (runId == null) return
     const id = setInterval(async () => {
+      // 只在空闲时取播——孩子正按住说话/豆豆正在想时不取（clear-on-fetch，
+      // 取了就没了；不取则留到空闲再播），避免自动播报串进麦克风或两声齐响。
+      if (stateRef.current !== 'idle') return
       try {
         const r = await fetch('/api/phone/next')
         if (!r.ok) return
