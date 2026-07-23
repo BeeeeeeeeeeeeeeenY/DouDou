@@ -20,9 +20,9 @@ CARD_PROTOCOL = (
     '- {"type":"stamp","name":"star|flower|heart|smiley|check|sun|moon|balloon",'
     '"count":1,"place":"near_new_ink","size":"S"}\n'
     "- 特别时刻（孩子画完、值得庆祝）可以放最多 1 张彩图卡：\n"
-    '  {"type":"image","subject":"circle|square|triangle|star|heart|sun|flower|tree",'
+    '  {"type":"image","subject":"' + "|".join(IMAGE_SUBJECTS) + '",'
     '"place":"blank_area","size":"l"}\n'
-    "  只在合适时用，别每回合都出；subject 必须来自上面 8 个词。\n"
+    "  只在合适时用，别每回合都出；subject 必须来自上面这些词，别用词表外的（会被丢弃）。\n"
     "规则：最多 3 张卡；text 的 content 不超过 6 个字；stamp 的 name 必须来自上面 8 个；"
     "spoken_text 与卡片讲同一件事；不要输出表情符号。"
 )

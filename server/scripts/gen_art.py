@@ -54,13 +54,49 @@ def draw(subject, d):
     elif subject == "tree":
         d.rectangle([cx - 30, cy + 40, cx + 30, cy + 170], fill=(150, 95, 45))
         d.ellipse([cx - 130, cy - 170, cx + 130, cy + 70], fill=GREEN)
+    elif subject == "apple":
+        d.ellipse([cx - 130, cy - 110, cx + 130, cy + 150], fill=(215, 45, 45))  # 暖：偏紫，接受
+        d.rectangle([cx - 12, cy - 150, cx + 12, cy - 90], fill=(150, 95, 45))
+        d.ellipse([cx + 5, cy - 165, cx + 95, cy - 110], fill=GREEN)  # 叶
+    elif subject == "fish":
+        d.ellipse([cx - 150, cy - 90, cx + 90, cy + 90], fill=BLUE)  # 身体
+        d.polygon([(cx + 80, cy), (cx + 170, cy - 80), (cx + 170, cy + 80)], fill=BLUE)  # 尾
+        d.ellipse([cx - 100, cy - 35, cx - 60, cy + 5], fill=(255, 255, 255))
+        d.ellipse([cx - 90, cy - 25, cx - 70, cy - 5], fill=(20, 20, 20))  # 眼
+    elif subject == "house":
+        d.rectangle([cx - 120, cy - 20, cx + 120, cy + 160], fill=BLUE)  # 墙
+        d.polygon([(cx - 150, cy - 20), (cx + 150, cy - 20), (cx, cy - 160)], fill=(215, 45, 45))  # 屋顶
+        d.rectangle([cx - 35, cy + 60, cx + 35, cy + 160], fill=YELLOW)  # 门
+    elif subject == "car":
+        d.rounded_rectangle([cx - 160, cy - 10, cx + 160, cy + 90], radius=25, fill=BLUE)  # 车身
+        d.rounded_rectangle([cx - 90, cy - 90, cx + 70, cy - 5], radius=25, fill=BLUE)  # 车顶
+        d.ellipse([cx - 120, cy + 55, cx - 40, cy + 135], fill=(20, 20, 20))  # 轮
+        d.ellipse([cx + 40, cy + 55, cx + 120, cy + 135], fill=(20, 20, 20))
+    elif subject == "cat":
+        d.polygon([(cx - 120, cy - 60), (cx - 60, cy - 170), (cx - 20, cy - 70)], fill=YELLOW)  # 耳
+        d.polygon([(cx + 120, cy - 60), (cx + 60, cy - 170), (cx + 20, cy - 70)], fill=YELLOW)
+        d.ellipse([cx - 130, cy - 110, cx + 130, cy + 140], fill=YELLOW)  # 头
+        for ex in (-55, 55):
+            d.ellipse([cx + ex - 18, cy - 40, cx + ex + 18, cy + 4], fill=(20, 20, 20))  # 眼
+        d.polygon([(cx - 16, cy + 20), (cx + 16, cy + 20), (cx, cy + 45)], fill=(215, 45, 45))  # 鼻
+    elif subject == "moon":
+        d.ellipse([cx - 150, cy - 150, cx + 150, cy + 150], fill=YELLOW)
+        d.ellipse([cx - 70, cy - 170, cx + 190, cy + 90], fill=WHITE)  # 抠出月牙
+    elif subject == "butterfly":
+        for sx in (-1, 1):
+            xa, xb = sorted([cx + sx * 20, cx + sx * 150])
+            d.ellipse([xa, cy - 130, xb, cy - 10], fill=BLUE)  # 上翅
+            xc, xd = sorted([cx + sx * 20, cx + sx * 130])
+            d.ellipse([xc, cy + 10, xd, cy + 130], fill=YELLOW)  # 下翅
+        d.ellipse([cx - 15, cy - 120, cx + 15, cy + 120], fill=(60, 40, 30))  # 身
     else:
         raise ValueError(subject)
 
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    subjects = ["circle", "square", "triangle", "star", "heart", "sun", "flower", "tree"]
+    subjects = ["circle", "square", "triangle", "star", "heart", "sun", "flower", "tree",
+                "apple", "fish", "house", "car", "cat", "moon", "butterfly"]
     for s in subjects:
         img = Image.new("RGB", (W, H), WHITE)
         draw(s, ImageDraw.Draw(img))

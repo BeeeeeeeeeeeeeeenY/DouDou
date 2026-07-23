@@ -58,16 +58,32 @@ async def turn(req: TurnRequest, request: Request):
             image_png = None
 
     lesson_context = ""
+    recent_replies: list[str] = []
     with request.app.state.sessionmaker() as db:
         found = active_current_lesson(db)
         if found is not None:
             _curriculum, lesson = found
             lesson_context = render_lesson_script(
                 lesson.script_text, latest_recap(db, lesson.curriculum_id))
+        # 最近几轮 tablet 回复：注入"别重复"上下文（/turn 本身无状态，
+        # 否则模型看不到自己已经说过/画过什么，会一直重复同一主题）。
+        rows = (db.query(Turn).filter(Turn.source == "tablet")
+                .order_by(Turn.id.desc()).limit(4).all())
+        for r in reversed(rows):
+            cj = r.cards_json if isinstance(r.cards_json, dict) else {}
+            sp = cj.get("spoken_text")
+            if sp:
+                recent_replies.append(sp)
+
+    user_text = TURN_USER_TEXT
+    if recent_replies:
+        joined = "；".join(recent_replies)
+        user_text += (f"\n（你最近几轮已经这样回应过：{joined}。这次务必换新说法、"
+                      "新主题、新图案，绝不重复上面说过或画过的内容。）")
 
     tin = TurnInput(
         source="tablet",
-        text=TURN_USER_TEXT,
+        text=user_text,
         image_png=image_png,
         device_protocol_suffix=cards_engine.CARD_PROTOCOL,
         lesson_context=lesson_context,
@@ -83,6 +99,11 @@ async def turn(req: TurnRequest, request: Request):
 
     spoken, cards, page_action, tags = cards_engine.build_cards(
         runner.reply_text, req.device_profile.profile)
+    # 页面写满就换新页：/turn 收到设备算好的 ink_coverage，超阈值时强制
+    # new_page（设备端把 new_page 与本地 page-full 合并处理）。模型自己几乎
+    # 从不发换页信号，靠服务器兜这一手。
+    if req.page_state.ink_coverage >= 0.55:
+        page_action = "new_page"
     resp = _response(req.turn_id, spoken, cards, page_action, tags)
     if runner.turn_id is not None:
         with request.app.state.sessionmaker() as db:

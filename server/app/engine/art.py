@@ -6,6 +6,7 @@ from pathlib import Path
 
 IMAGE_SUBJECTS: tuple[str, ...] = (
     "circle", "square", "triangle", "star", "heart", "sun", "flower", "tree",
+    "apple", "fish", "house", "car", "cat", "moon", "butterfly",
 )
 _ART_DIR = Path(__file__).resolve().parent.parent / "art"
 
