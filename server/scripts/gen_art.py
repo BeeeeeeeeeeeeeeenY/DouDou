@@ -28,7 +28,12 @@ def draw(subject, d):
     YELLOW = (255, 225, 20)  # 标定：清爽淡黄
     cx, cy = W // 2, H // 2
     if subject == "circle":
-        d.ellipse([cx - 150, cy - 150, cx + 150, cy + 150], fill=(215, 45, 45))  # 暖：偏紫，接受
+        d.ellipse([cx - 150, cy - 150, cx + 150, cy + 150], fill=YELLOW)  # 改：原暖红偏紫难看 → 干净黄
+    elif subject == "balloon":
+        d.ellipse([cx - 110, cy - 165, cx + 110, cy + 70], fill=BLUE)  # 气球身体（蓝，标定最干净）
+        d.polygon([(cx - 16, cy + 62), (cx + 16, cy + 62), (cx, cy + 92)], fill=BLUE)  # 打结
+        d.line([cx, cy + 92, cx - 26, cy + 190], fill=(60, 60, 60), width=5)  # 气球线
+        d.ellipse([cx - 72, cy - 120, cx - 30, cy - 72], fill=WHITE)  # 高光
     elif subject == "square":
         d.rectangle([cx - 140, cy - 140, cx + 140, cy + 140], fill=BLUE)
     elif subject == "triangle":
@@ -96,7 +101,7 @@ def draw(subject, d):
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     subjects = ["circle", "square", "triangle", "star", "heart", "sun", "flower", "tree",
-                "apple", "fish", "house", "car", "cat", "moon", "butterfly"]
+                "apple", "fish", "house", "car", "cat", "moon", "butterfly", "balloon"]
     for s in subjects:
         img = Image.new("RGB", (W, H), WHITE)
         draw(s, ImageDraw.Draw(img))
