@@ -65,12 +65,19 @@
    - 无 pending 或无 running run → `{"demo": null}`。
    - 轻量、无副作用（除清 pending）；不写 Turn 记录。
 
-5. **课程脚本**（`seed_shapes.py`）：**被演示的课固定为第 3 课「圆圆的朋友」**（本就整课教画圆，最贴合 circle 演示）。给其**教画那一步**（脚本 ③ 布置"我们来吹泡泡吧，画大大小小的圆泡泡"）加指令：讲到"先画一个圆圆的…"时，在回复末尾单行输出 `⟦demo:circle⟧`（家长孩子都看不到，与 lesson_report 同规格）。仅这一步、只出一次。（首课「想画就画」的小太阳"圆圆的脑袋"节拍可复用同机制，但本次先只做第 3 课。）
+6. **清空画板命令（复用同一通道）**：`/turn/next` 不止送演示，也送设备命令。
+   - `LessonRun` 复用/并列一个 `pending_command: str | None`（或把 demo 与 command 合进一个"待办"结构）；本次先支持 `"clear"`。
+   - 手机页（`Phone.tsx`）加一个**「清空画板」按钮** → POST 新端点 `POST /api/phone/clear-board`（带当前 lesson_run_id）→ 服务器给该 running run 挂 `pending_command="clear"`。
+   - `GET /turn/next` 一并返回 `{"command": "clear"}` 并清空该字段；平板轮询到 → `user_ink.clear()` + 重绘空白页。
+   - 无 running run 时按钮可禁用或退化为无操作。等于顺手把"远程清屏"这条也做了（用户实际需求），几乎零额外成本。
+
+7. **课程脚本**（`seed_shapes.py`）：**被演示的课固定为第 3 课「圆圆的朋友」**（本就整课教画圆，最贴合 circle 演示）。给其**教画那一步**（脚本 ③ 布置"我们来吹泡泡吧，画大大小小的圆泡泡"）加指令：讲到"先画一个圆圆的…"时，在回复末尾单行输出 `⟦demo:circle⟧`（家长孩子都看不到，与 lesson_report 同规格）。仅这一步、只出一次。（首课「想画就画」的小太阳"圆圆的脑袋"节拍可复用同机制，但本次先只做第 3 课。）
 
 ## 5. 设备改动（device/riddle）
 
 1. **空闲轮询循环**：`turn_mode` 开启（上课模式）且笔空闲时，每 `RIDDLE_DEMO_POLL_SECS`（默认 1.5s）GET 一次 `next` 端点（新增 env `RIDDLE_TURN_NEXT_URL`，或由 `RIDDLE_TURN_URL` 基址推导 `/turn/next`）。解析 `{demo:{shape,place,pace}}`。
 2. **演示渲染**：拿到 shape → 本地 `shape_strokes(shape)` 生成几何 → 构建**实心墨迹 sketch** 的 `RenderPlan`（非淡墨描红骨架；`pace:slow` → 小 `points_per_frame`）→ 交 `layout` 摆位到空白角落 → 现成动画循环逐笔画出。全部复用既有渲染/排版代码，新代码只是"shape 指令 → sketch RenderPlan"这一小段 + 轮询。
+   - **`command:"clear"`**：轮询到清空命令 → `user_ink.clear()` + 重绘空白页（复用既有清屏路径），不经动画。
 3. **只在空闲演示**：正在落笔（孩子在画）时不轮询/不插入演示，避免和孩子的笔抢；若演示到手时孩子已开画，本轮跳过。
 4. **抗断**：轮询失败静默、下个周期重试（与既有睡眠/断网韧性一致）。
 
