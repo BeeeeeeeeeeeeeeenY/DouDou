@@ -1,5 +1,12 @@
-from fastapi import APIRouter, Request
+import base64
+
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+
+from app.engine import cards as cards_engine
+from app.engine.errors import ConfigError
+from app.engine.turn import TurnInput, TurnRunner
+from app.engine.upstream import UpstreamError
 
 router = APIRouter()
 
@@ -36,7 +43,33 @@ def _response(turn_id: str, spoken_text: str, cards: list,
     }
 
 
+TURN_USER_TEXT = "（这是孩子刚画的整页）请按纸面卡片协议回应。"
+
+
 @router.post("/turn")
 async def turn(req: TurnRequest, request: Request):
-    # 骨架：形状先锁定，模型调用在 Task 3 接线。
-    return _response(req.turn_id, "", [])
+    image_png = None
+    if req.page_png:
+        try:
+            image_png = base64.b64decode(req.page_png)
+        except (ValueError, TypeError):
+            image_png = None
+
+    tin = TurnInput(
+        source="tablet",
+        text=TURN_USER_TEXT,
+        image_png=image_png,
+        device_protocol_suffix=cards_engine.CARD_PROTOCOL,
+    )
+    runner = TurnRunner(request.app.state.sessionmaker, request.app.state.data_dir, tin)
+    try:
+        async for _ in runner.stream():
+            pass
+    except ConfigError as e:
+        raise HTTPException(400, e.message)
+    except UpstreamError:
+        raise HTTPException(502, "模型服务出错，请在后台检查配置")
+
+    spoken, cards, page_action, tags = cards_engine.build_cards(
+        runner.reply_text, req.device_profile.profile)
+    return _response(req.turn_id, spoken, cards, page_action, tags)
