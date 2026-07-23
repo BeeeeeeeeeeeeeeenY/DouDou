@@ -8,6 +8,9 @@ LESSON_REPORT_MARK = "⟦lesson_report⟧"
 RECAP_TOKEN = "{prev_lesson_recap}"
 NO_RECAP_TEXT = "（没有上次课的记录，简短问好后直接开始）"
 VALID_REPORT_STATUS = ("completed", "partial", "skipped")
+DEMO_MARK = "⟦demo:"
+DEMO_END = "⟧"
+DEMO_SHAPES = ("circle",)
 
 
 def parse_lesson_report(text: str) -> tuple[str, dict | None, str]:
@@ -24,6 +27,21 @@ def parse_lesson_report(text: str) -> tuple[str, dict | None, str]:
     except json.JSONDecodeError:
         report = None
     return clean, report, raw
+
+
+def parse_demo(text: str) -> tuple[str, str | None]:
+    """抽出并剥离 ⟦demo:<shape>⟧ 标记（家长孩子都看不到、绝不念）。
+    shape 须在 DEMO_SHAPES 内才认；无论认不认都从文本剥离。
+    返回 (clean_text, shape|None)。"""
+    idx = text.find(DEMO_MARK)
+    if idx == -1:
+        return text, None
+    end = text.find(DEMO_END, idx + len(DEMO_MARK))
+    if end == -1:  # 未闭合：从标记处截断，不认形状
+        return text[:idx].strip(), None
+    shape = text[idx + len(DEMO_MARK):end].strip()
+    clean = (text[:idx] + text[end + len(DEMO_END):]).strip()
+    return clean, (shape if shape in DEMO_SHAPES else None)
 
 
 def active_current_lesson(db) -> tuple[Curriculum, Lesson] | None:

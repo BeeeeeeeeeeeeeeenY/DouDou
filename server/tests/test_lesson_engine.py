@@ -157,3 +157,28 @@ def test_attach_artifacts_excludes_after_window(db):
     attach_artifacts(db, run)
     assert run.artifact_turn_ids in (None, [])
     assert db.get(models.Turn, late.id).lesson_run_id is None
+
+
+from app.engine.lesson import parse_demo
+
+
+def test_parse_demo_extracts_and_strips_known_shape():
+    clean, shape = parse_demo("先画一个圆圆的小脑袋\n⟦demo:circle⟧")
+    assert shape == "circle"
+    assert "demo" not in clean and clean == "先画一个圆圆的小脑袋"
+
+
+def test_parse_demo_unknown_shape_stripped_but_not_recognized():
+    clean, shape = parse_demo("好呀 ⟦demo:banana⟧")
+    assert shape is None
+    assert "demo" not in clean and clean == "好呀"
+
+
+def test_parse_demo_absent_returns_text_unchanged():
+    clean, shape = parse_demo("普通一句话")
+    assert (clean, shape) == ("普通一句话", None)
+
+
+def test_parse_demo_unclosed_marker_truncates():
+    clean, shape = parse_demo("画个圆 ⟦demo:circle")
+    assert shape is None and clean == "画个圆"
