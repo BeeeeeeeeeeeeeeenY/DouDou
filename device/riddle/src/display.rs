@@ -119,6 +119,32 @@ impl Display {
         let _ = (w, h);
     }
 
+    /// Spike/diagnostic hook (used by `--color-test`): push a swap at an
+    /// EXPLICIT vendor waveform `mode`, so a colour test can sweep modes to
+    /// find which waveform actually renders colour and how fast it is.
+    /// Returns whatever `quill_swap` gives back (0 off-takeover).
+    pub fn swap_raw(&self, x: i32, y: i32, w: i32, h: i32, mode: i32, full: i32) -> u64 {
+        match self {
+            Display::Qtfb(c) => {
+                let _ = c.update_all();
+                0
+            }
+            Display::Quill => {
+                #[cfg(feature = "takeover")]
+                unsafe {
+                    let t = quill_ffi::quill_swap(x, y, w, h, mode, full);
+                    quill_ffi::quill_process_events();
+                    t
+                }
+                #[cfg(not(feature = "takeover"))]
+                {
+                    let _ = (x, y, w, h, mode, full);
+                    0
+                }
+            }
+        }
+    }
+
     /// Drain window-system events. For qtfb this also detects window close
     /// (returns Err); the takeover backend has no window to lose.
     pub fn pump(&self) -> io::Result<Vec<crate::qtfb::InputEvent>> {

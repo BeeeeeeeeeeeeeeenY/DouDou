@@ -194,6 +194,13 @@ fn main() {
         Some("--cards-test") => {
             std::process::exit(cards_test(&args));
         }
+        // Spike (S0a): paint colour bands and sweep vendor waveform modes on
+        // the real takeover display, timing each swap. A human watches the
+        // e-paper to judge whether colour is viable (which mode, how fast,
+        // how much flicker). Needs the takeover backend + xochitl stopped.
+        Some("--color-test") => {
+            std::process::exit(color_test(&args));
+        }
         Some("--version" | "-V") => {
             println!("riddle {}", env!("CARGO_PKG_VERSION"));
             return;
@@ -212,6 +219,73 @@ fn main() {
     if let Err(e) = run() {
         eprintln!("riddle: fatal: {e}");
         std::process::exit(1);
+    }
+}
+
+/// S0a colour spike: paint 9 horizontal colour bands into the real takeover
+/// framebuffer, then re-swap the whole screen at a sweep of vendor waveform
+/// `mode` values, timing each. The buffer never changes between swaps, so the
+/// ONLY variable a watcher sees is the waveform. Prints a banner before each
+/// swap so the operator can correlate what's on the panel with the mode.
+fn color_test(args: &[String]) -> i32 {
+    // Optional hold seconds per mode (default 5): `--color-test [secs]`.
+    let hold = args.get(2).and_then(|s| s.parse::<u64>().ok()).filter(|s| *s > 0).unwrap_or(5);
+    let (display, mut surf) = match display::Display::open() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("color-test: display open failed: {e}");
+            eprintln!("  (needs the takeover build + xochitl stopped)");
+            return 1;
+        }
+    };
+    let (w, h) = (surf.w, surf.h);
+    eprintln!("color-test: surface {w}x{h} open, hold {hold}s/mode");
+
+    // RGB565 band colours (Surface expands to RGB32 on the takeover buffer).
+    // Painted once; only the top mode-indicator strip changes per swap.
+    let bands: [(u16, &str); 8] = [
+        (0xF800, "red"),
+        (0x07E0, "green"),
+        (0x001F, "blue"),
+        (0xFFE0, "yellow"),
+        (0x07FF, "cyan"),
+        (0xF81F, "magenta"),
+        (0x7BCF, "mid-gray"),
+        (0x0000, "black"),
+    ];
+    // Leave the top STRIP px as a white mode-indicator band; split the rest
+    // among the colour bands.
+    const STRIP: usize = 150;
+    let bh = (h - STRIP) / bands.len();
+    for (i, (c, name)) in bands.iter().enumerate() {
+        surf.fill_rect(0, STRIP + i * bh, w, bh, *c);
+        eprintln!("  band {i}: {name} (0x{c:04X})");
+    }
+
+    // Loop the COLOUR modes (0/3/4/5; 1/2 render grey, 6/7 are rejected) so a
+    // watcher can A/B them side by side over time. The on-screen indicator
+    // draws (mode+1) black squares so the watcher can read which mode is
+    // showing: 1 square = mode 0, 4 = mode 3, 5 = mode 4, 6 = mode 5.
+    // Runs forever; stop the systemd unit to end it (xochitl auto-restores).
+    let sweep: [(i32, i32); 4] = [(0, 0), (3, 0), (4, 0), (5, 0)];
+    eprintln!("color-test: looping colour modes {:?} at {hold}s each; stop the unit to end",
+        sweep.iter().map(|(m, _)| *m).collect::<Vec<_>>());
+    let mut round = 0u64;
+    loop {
+        round += 1;
+        for (mode, full) in sweep {
+            // Repaint the indicator strip: white bg + (mode+1) black squares.
+            surf.fill_rect(0, 0, w, STRIP, 0xFFFF);
+            for k in 0..=(mode as usize) {
+                surf.fill_rect(30 + k * 130, 40, 90, 90, 0x0000);
+            }
+            let t0 = std::time::Instant::now();
+            let ret = display.swap_raw(0, 0, w as i32, h as i32, mode, full);
+            let ms = t0.elapsed().as_millis();
+            eprintln!("round {round} mode={mode} ({} squares): swap {ret}, {ms}ms; hold {hold}s",
+                mode + 1);
+            std::thread::sleep(std::time::Duration::from_secs(hold));
+        }
     }
 }
 
