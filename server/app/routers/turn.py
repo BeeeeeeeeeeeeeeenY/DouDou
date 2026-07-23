@@ -123,6 +123,21 @@ async def turn(req: TurnRequest, request: Request):
     # 从不发换页信号，靠服务器兜这一手。
     if req.page_state.ink_coverage >= 0.55:
         page_action = "new_page"
+    # 平板只承载画面：去掉 text 卡（DouDou 的话走手机语音）
+    cards = [c for c in cards if c.get("type") != "text"]
+    # 彩图节流：每 run 至多每 3 次提交 1 张；首张放行
+    if active_run_id is not None:
+        with request.app.state.sessionmaker() as db:
+            run = db.get(LessonRun, active_run_id)
+            if run is not None:
+                run.tablet_turns = (run.tablet_turns or 0) + 1
+                has_img = any(c.get("type") == "image" for c in cards)
+                allow_img = (run.last_image_turn or 0) == 0 or run.tablet_turns - run.last_image_turn >= 3
+                if has_img and allow_img:
+                    run.last_image_turn = run.tablet_turns
+                elif has_img:
+                    cards = [c for c in cards if c.get("type") != "image"]
+                db.commit()
     resp = _response(req.turn_id, spoken, cards, page_action, tags)
     if runner.turn_id is not None:
         with request.app.state.sessionmaker() as db:

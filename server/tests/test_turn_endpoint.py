@@ -84,9 +84,11 @@ def test_turn_without_active_profile_returns_400(client):
 
 @respx.mock
 def test_turn_persists_cards_json(client, db):
+    # text 卡不上平板（见 test_turn_drops_text_cards），持久化的应是过滤后的
+    # 卡片，故这里用 stamp 卡验证持久化本身能正常工作。
     _setup_active_profile(db)
     reply = json.dumps({"spoken_text": "好", "paper_cards": [
-        {"type": "text", "content": "太阳", "size": "L"}]}, ensure_ascii=False)
+        {"type": "stamp", "name": "sun", "count": 1, "size": "L"}]}, ensure_ascii=False)
     respx.post("https://up.test/v1/chat/completions").mock(
         return_value=httpx.Response(200, text=_sse(reply)))
 
@@ -96,7 +98,7 @@ def test_turn_persists_cards_json(client, db):
     row = db.query(m.Turn).filter(m.Turn.source == "tablet").order_by(m.Turn.id.desc()).first()
     assert row is not None
     assert row.cards_json is not None
-    assert row.cards_json["paper_cards"][0]["content"] == "太阳"
+    assert row.cards_json["paper_cards"][0]["name"] == "sun"
 
 
 def _setup_course(client, db):
@@ -170,3 +172,55 @@ def test_turn_next_returns_and_clears_command(client, db):
 
 def test_turn_next_no_running_run_is_empty(client, db):
     assert client.get("/turn/next").json() == {"demo": None, "command": None}
+
+
+@respx.mock
+def test_turn_drops_text_cards(client, db):
+    # 平板只承载画面：DouDou 的话走手机语音，text 卡应被过滤掉。
+    _setup_active_profile(db)
+    reply = json.dumps({
+        "spoken_text": "今天画得真棒",
+        "paper_cards": [
+            {"type": "text", "content": "真棒", "place": "blank_area", "size": "L"},
+            {"type": "stamp", "name": "star", "count": 1, "place": "near_new_ink"},
+        ],
+        "page_action": "none", "memory_tags": [],
+    }, ensure_ascii=False)
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=_sse(reply)))
+
+    r = client.post("/turn", json=_min_body())
+    assert r.status_code == 200
+    cards = r.json()["paper_cards"]
+    assert not any(c["type"] == "text" for c in cards)
+    assert any(c["type"] == "stamp" for c in cards)
+
+
+def _image_reply(n: int = 1) -> str:
+    return json.dumps({
+        "spoken_text": f"你画了一个圆圈，第{n}次",
+        "paper_cards": [{"type": "image", "subject": "circle", "place": "blank_area", "size": "l"}],
+        "page_action": "none", "memory_tags": [],
+    }, ensure_ascii=False)
+
+
+@respx.mock
+def test_turn_throttles_images(client, db):
+    # 彩图节流：每 run 至多每 3 次提交放行 1 张；首张放行，之后需等满 3 轮。
+    _setup_course(client, db)
+    from app import models
+    run = models.LessonRun(lesson_id=db.query(models.Lesson).first().id, status="running")
+    db.add(run); db.commit()
+    respx.post("https://up.test/v1/chat/completions").mock(
+        side_effect=[httpx.Response(200, text=_sse(_image_reply(i))) for i in (1, 2, 3)])
+
+    r1 = client.post("/turn", json=_min_body(turn_id="t-1"))
+    r2 = client.post("/turn", json=_min_body(turn_id="t-2"))
+    r3 = client.post("/turn", json=_min_body(turn_id="t-3"))
+
+    def has_image(resp):
+        return any(c["type"] == "image" for c in resp.json()["paper_cards"])
+
+    assert has_image(r1), "first submission should be allowed through"
+    assert not has_image(r2), "second submission within throttle window should be dropped"
+    assert not has_image(r3), "third submission within throttle window should be dropped"
