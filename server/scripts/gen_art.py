@@ -20,34 +20,36 @@ def _star_points(cx, cy, r_out, r_in, n=5):
 
 
 def draw(subject, d):
+    # 配色为彩色墨水屏（Spectra 6）调亮：高亮度、高饱和、贴近面板原色
+    # （红/黄/蓝/绿），避免暗/浊色在纸上发闷。
     cx, cy = W // 2, H // 2
     if subject == "circle":
-        d.ellipse([cx - 150, cy - 150, cx + 150, cy + 150], fill=(220, 40, 40))
+        d.ellipse([cx - 150, cy - 150, cx + 150, cy + 150], fill=(255, 45, 45))
     elif subject == "square":
-        d.rectangle([cx - 140, cy - 140, cx + 140, cy + 140], fill=(40, 90, 220))
+        d.rectangle([cx - 140, cy - 140, cx + 140, cy + 140], fill=(30, 115, 240))
     elif subject == "triangle":
-        d.polygon([(cx, cy - 160), (cx - 160, cy + 130), (cx + 160, cy + 130)], fill=(40, 170, 70))
+        d.polygon([(cx, cy - 160), (cx - 160, cy + 130), (cx + 160, cy + 130)], fill=(45, 205, 80))
     elif subject == "star":
-        d.polygon(_star_points(cx, cy, 170, 70), fill=(240, 200, 30))
+        d.polygon(_star_points(cx, cy, 170, 70), fill=(255, 225, 20))
     elif subject == "heart":
-        d.ellipse([cx - 150, cy - 120, cx, cy + 30], fill=(230, 60, 130))
-        d.ellipse([cx, cy - 120, cx + 150, cy + 30], fill=(230, 60, 130))
-        d.polygon([(cx - 150, cy - 30), (cx + 150, cy - 30), (cx, cy + 160)], fill=(230, 60, 130))
+        d.ellipse([cx - 150, cy - 120, cx, cy + 30], fill=(255, 80, 150))
+        d.ellipse([cx, cy - 120, cx + 150, cy + 30], fill=(255, 80, 150))
+        d.polygon([(cx - 150, cy - 30), (cx + 150, cy - 30), (cx, cy + 160)], fill=(255, 80, 150))
     elif subject == "sun":
         for i in range(12):
             a = i * math.pi / 6
             d.line([cx + 100 * math.cos(a), cy + 100 * math.sin(a),
-                    cx + 180 * math.cos(a), cy + 180 * math.sin(a)], fill=(240, 170, 20), width=18)
-        d.ellipse([cx - 100, cy - 100, cx + 100, cy + 100], fill=(250, 200, 30))
+                    cx + 180 * math.cos(a), cy + 180 * math.sin(a)], fill=(255, 180, 10), width=18)
+        d.ellipse([cx - 100, cy - 100, cx + 100, cy + 100], fill=(255, 220, 20))
     elif subject == "flower":
         for i in range(6):
             a = i * math.pi / 3
             px, py = cx + 90 * math.cos(a), cy + 90 * math.sin(a)
-            d.ellipse([px - 55, py - 55, px + 55, py + 55], fill=(230, 90, 170))
-        d.ellipse([cx - 50, cy - 50, cx + 50, cy + 50], fill=(250, 210, 40))
+            d.ellipse([px - 55, py - 55, px + 55, py + 55], fill=(255, 95, 180))
+        d.ellipse([cx - 50, cy - 50, cx + 50, cy + 50], fill=(255, 225, 20))
     elif subject == "tree":
-        d.rectangle([cx - 30, cy + 40, cx + 30, cy + 170], fill=(140, 90, 40))
-        d.ellipse([cx - 130, cy - 170, cx + 130, cy + 70], fill=(40, 160, 70))
+        d.rectangle([cx - 30, cy + 40, cx + 30, cy + 170], fill=(170, 110, 45))
+        d.ellipse([cx - 130, cy - 170, cx + 130, cy + 70], fill=(45, 205, 80))
     else:
         raise ValueError(subject)
 
