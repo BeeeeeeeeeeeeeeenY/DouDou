@@ -25,7 +25,7 @@ def test_build_cards_full_and_truncates_to_three():
         "paper_cards": [
             {"type": "stamp", "name": "star", "count": 3, "place": "near_new_ink", "size": "S"},
             {"type": "text", "content": "你画得真好看极了", "place": "blank_area", "size": "L"},
-            {"type": "image", "url": "/api/files/lesson-art/sun.png", "size": "L"},
+            {"type": "image", "subject": "sun", "size": "L"},
             {"type": "text", "content": "多余", "size": "S"},
         ],
         "page_action": "none",
@@ -36,7 +36,7 @@ def test_build_cards_full_and_truncates_to_three():
     assert len(cards) == 3            # 第 4 张被 ≤3 丢弃
     assert cards[0]["type"] == "stamp" and cards[0]["count"] == 3
     assert cards[1]["type"] == "text" and cards[1]["content"] == "你画得真好看"  # 6 字截断
-    assert cards[2]["type"] == "image" and cards[2]["url"].endswith("sun.png")
+    assert cards[2]["type"] == "image" and "data" in cards[2] and "url" not in cards[2]
     assert tags == ["sun"]
 
 
@@ -57,15 +57,15 @@ def test_build_cards_at_most_one_image():
     reply = json.dumps({
         "spoken_text": "",
         "paper_cards": [
-            {"type": "image", "url": "a.png"},
-            {"type": "image", "url": "b.png"},
+            {"type": "image", "subject": "circle"},
+            {"type": "image", "subject": "star"},
         ],
     }, ensure_ascii=False)
     _, cards, _, _ = build_cards(reply, "child_3_4")
-    assert len(cards) == 1 and cards[0]["url"] == "a.png"
+    assert len(cards) == 1 and cards[0]["type"] == "image" and "data" in cards[0]
 
 
-def test_build_cards_drops_image_without_url():
+def test_build_cards_drops_image_without_subject():
     reply = json.dumps({"spoken_text": "", "paper_cards": [{"type": "image"}]}, ensure_ascii=False)
     _, cards, _, _ = build_cards(reply, "child_3_4")
     assert cards == []
@@ -82,3 +82,34 @@ def test_build_cards_degrades_non_json_to_single_text_card():
 def test_card_protocol_mentions_json_and_stamp_names():
     assert "JSON" in CARD_PROTOCOL or "json" in CARD_PROTOCOL
     assert "star" in CARD_PROTOCOL
+
+
+def test_image_card_subject_becomes_inline_data():
+    import base64
+    reply = json.dumps({"spoken_text": "画好啦", "paper_cards": [
+        {"type": "image", "subject": "circle", "size": "l"}]}, ensure_ascii=False)
+    _, cards, _, _ = build_cards(reply, "child_3_4")
+    assert len(cards) == 1
+    c = cards[0]
+    assert c["type"] == "image" and "url" not in c
+    assert base64.b64decode(c["data"])[:4] == b"\x89PNG"
+
+
+def test_image_card_unknown_subject_dropped():
+    reply = json.dumps({"spoken_text": "", "paper_cards": [
+        {"type": "image", "subject": "dragon"}]}, ensure_ascii=False)
+    _, cards, _, _ = build_cards(reply, "child_3_4")
+    assert cards == []
+
+
+def test_at_most_one_image_still_holds_with_subjects():
+    reply = json.dumps({"spoken_text": "", "paper_cards": [
+        {"type": "image", "subject": "circle"},
+        {"type": "image", "subject": "star"}]}, ensure_ascii=False)
+    _, cards, _, _ = build_cards(reply, "child_3_4")
+    assert len(cards) == 1
+
+
+def test_card_protocol_mentions_image_subjects():
+    assert "image" in CARD_PROTOCOL
+    assert "circle" in CARD_PROTOCOL

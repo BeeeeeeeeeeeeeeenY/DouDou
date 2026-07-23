@@ -3,6 +3,8 @@
 
 import json
 
+from app.engine.art import IMAGE_SUBJECTS, subject_data_b64
+
 STAMP_NAMES = ("star", "flower", "heart", "smiley", "check", "sun", "moon", "balloon")
 MAX_CARDS = 3
 MAX_STAMP_COUNT = 5
@@ -13,10 +15,14 @@ CARD_PROTOCOL = (
     "\n\n【纸面卡片协议】你正在通过 DouDou 平板回应孩子。只输出一个 JSON 对象，"
     "不要任何多余文字、不要 Markdown 围栏：\n"
     '{"spoken_text":"给孩子/家长听的一句话","paper_cards":[卡片...],"page_action":"none"}\n'
-    "卡片类型（本期只用 text 和 stamp）：\n"
+    "卡片类型：\n"
     '- {"type":"text","content":"手写短句，最多6个字","place":"blank_area","size":"L"}\n'
     '- {"type":"stamp","name":"star|flower|heart|smiley|check|sun|moon|balloon",'
     '"count":1,"place":"near_new_ink","size":"S"}\n'
+    "- 特别时刻（孩子画完、值得庆祝）可以放最多 1 张彩图卡：\n"
+    '  {"type":"image","subject":"circle|square|triangle|star|heart|sun|flower|tree",'
+    '"place":"blank_area","size":"l"}\n'
+    "  只在合适时用，别每回合都出；subject 必须来自上面 8 个词。\n"
     "规则：最多 3 张卡；text 的 content 不超过 6 个字；stamp 的 name 必须来自上面 8 个；"
     "spoken_text 与卡片讲同一件事；不要输出表情符号。"
 )
@@ -81,10 +87,13 @@ def _clean_card(raw: dict, cap: int) -> dict | None:
         count = count if isinstance(count, int) else 1
         return {"type": "stamp", "name": name, "count": max(1, min(count, MAX_STAMP_COUNT)), **common}
     if ctype == "image":
-        url = raw.get("url")
-        if not isinstance(url, str) or not url:
+        subject = raw.get("subject")
+        if subject not in IMAGE_SUBJECTS:
             return None
-        return {"type": "image", "url": url, **common}
+        data = subject_data_b64(subject)
+        if data is None:
+            return None
+        return {"type": "image", "data": data, **common}
     return None  # 未知/本期不支持的类型（sketch/count/trace/page）：丢弃
 
 
