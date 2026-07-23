@@ -24,6 +24,16 @@ def parse_lesson_report(text: str) -> tuple[str, dict | None, str]:
     return clean, report, raw
 
 
+def active_current_lesson(db) -> tuple[Curriculum, Lesson] | None:
+    cur = db.query(Curriculum).filter(Curriculum.status == "active").first()
+    if cur is None or cur.current_lesson_id is None:
+        return None
+    lesson = db.get(Lesson, cur.current_lesson_id)
+    if lesson is None:
+        return None
+    return cur, lesson
+
+
 def render_lesson_script(script_text: str, prev_recap: str) -> str:
     """把 {prev_lesson_recap} 替换为上次课回顾。用 replace 不用 format（脚本含花括号示例）。"""
     if RECAP_TOKEN not in script_text:

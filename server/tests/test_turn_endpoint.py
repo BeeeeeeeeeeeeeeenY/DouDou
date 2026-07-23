@@ -99,6 +99,34 @@ def test_turn_persists_cards_json(client, db):
     assert row.cards_json["paper_cards"][0]["content"] == "太阳"
 
 
+def _setup_course(client, db):
+    _setup_active_profile(db)
+    r = client.post("/api/admin/curricula/seed-shapes01")
+    cid = r.json()["id"]
+    client.post(f"/api/admin/curricula/{cid}/activate")
+
+
+@respx.mock
+def test_turn_injects_active_lesson_script(client, db):
+    _setup_course(client, db)
+    route = respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=_sse(json.dumps(
+            {"spoken_text": "好", "paper_cards": []}, ensure_ascii=False))))
+    client.post("/turn", json=_min_body(page_png="QUJD"))
+    sys_prompt = json.loads(route.calls[0].request.content)["messages"][0]["content"]
+    assert "形状" in sys_prompt or "圆" in sys_prompt, "lesson script injected"
+
+
+@respx.mock
+def test_turn_without_active_curriculum_still_works(client, db):
+    _setup_active_profile(db)  # 无 active 课程
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=_sse(json.dumps(
+            {"spoken_text": "好", "paper_cards": []}, ensure_ascii=False))))
+    r = client.post("/turn", json=_min_body(page_png="QUJD"))
+    assert r.status_code == 200
+
+
 def test_legacy_turns_table_gains_cards_json_column(tmp_path):
     import sqlite3
     from sqlalchemy import text

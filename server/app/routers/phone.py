@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.engine.errors import ConfigError
 from app.engine.lesson import (
+    active_current_lesson,
     attach_artifacts,
     close_run_malformed,
     close_run_with_report,
@@ -16,20 +17,14 @@ from app.engine.lesson import (
 from app.engine.tts import synthesize
 from app.engine.turn import TurnInput, TurnRunner
 from app.engine.upstream import UpstreamError
-from app.models import Curriculum, Lesson, LessonRun, Turn, utcnow
+from app.models import Lesson, LessonRun, Turn, utcnow
 from app.routers.admin_voice import load_voice_config
 
 router = APIRouter(prefix="/api/phone")
 
 
-def _active_current_lesson(db) -> tuple[Curriculum, Lesson] | None:
-    cur = db.query(Curriculum).filter(Curriculum.status == "active").first()
-    if cur is None or cur.current_lesson_id is None:
-        return None
-    lesson = db.get(Lesson, cur.current_lesson_id)
-    if lesson is None:
-        return None
-    return cur, lesson
+# 保留旧名以兼容既有调用点/引用；实现已提到 app.engine.lesson 作公共 helper。
+_active_current_lesson = active_current_lesson
 
 
 @router.get("/current-lesson")

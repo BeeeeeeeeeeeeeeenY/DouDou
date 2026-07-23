@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.engine import cards as cards_engine
 from app.engine.errors import ConfigError
+from app.engine.lesson import active_current_lesson, latest_recap, render_lesson_script
 from app.engine.turn import TurnInput, TurnRunner
 from app.engine.upstream import UpstreamError
 from app.models import Turn
@@ -56,11 +57,20 @@ async def turn(req: TurnRequest, request: Request):
         except (ValueError, TypeError):
             image_png = None
 
+    lesson_context = ""
+    with request.app.state.sessionmaker() as db:
+        found = active_current_lesson(db)
+        if found is not None:
+            _curriculum, lesson = found
+            lesson_context = render_lesson_script(
+                lesson.script_text, latest_recap(db, lesson.curriculum_id))
+
     tin = TurnInput(
         source="tablet",
         text=TURN_USER_TEXT,
         image_png=image_png,
         device_protocol_suffix=cards_engine.CARD_PROTOCOL,
+        lesson_context=lesson_context,
     )
     runner = TurnRunner(request.app.state.sessionmaker, request.app.state.data_dir, tin)
     try:
