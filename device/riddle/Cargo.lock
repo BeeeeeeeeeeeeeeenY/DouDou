@@ -336,6 +336,7 @@ name = "riddle"
 version = "0.3.0"
 dependencies = [
  "ab_glyph",
+ "base64",
  "libc",
  "png",
  "serde",

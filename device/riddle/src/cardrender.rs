@@ -909,6 +909,12 @@ fn plan_in_rect(
         cards::Card::Page { .. } => {
             eprintln!("riddle: cards: nested page card dropped in render");
         }
+        // Image rendering (plan_image) lands in Task 2 of the image-card
+        // plan; this arm exists only to satisfy match exhaustiveness now
+        // that cards.rs (Task 1) parses `Card::Image`.
+        cards::Card::Image { .. } => {
+            eprintln!("riddle: cardrender: image card not yet rendered (Task 2)");
+        }
     }
     out
 }
@@ -958,6 +964,13 @@ pub fn plan_card(
             plan_trace(common, *kind, content, *guide, map, font, anchor)
         }
         cards::Card::Page { layout: items } => plan_page(items, map, font),
+        // Image rendering (plan_image) lands in Task 2 of the image-card
+        // plan; this arm exists only to satisfy match exhaustiveness now
+        // that cards.rs (Task 1) parses `Card::Image`.
+        cards::Card::Image { .. } => {
+            eprintln!("riddle: cardrender: image card not yet rendered (Task 2)");
+            Vec::new()
+        }
     }
 }
 

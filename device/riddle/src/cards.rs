@@ -15,6 +15,8 @@ pub const DEFAULT_MAX_TEXT_CHARS: usize = 6;
 /// generous ceiling that keeps an unclamped server value from exploding the
 /// render queue.
 pub const MAX_STAMP_COUNT: u32 = 5;
+/// 单张 image 卡解码后 PNG 字节上限（防内存爆掉）。一张纸面插画远小于此。
+pub const MAX_IMAGE_BYTES: usize = 1_000_000;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Place {
@@ -82,6 +84,9 @@ pub enum Card {
     /// `layout`: (card, rect_norm x,y,w,h) — the one place the server picks
     /// explicit coordinates (spec §14.2: "唯一允许服务器排坐标的地方").
     Page { layout: Vec<(Card, (f32, f32, f32, f32))> },
+    /// `image`: 服务器内联的真彩位图（base64 PNG，已解码为原始 PNG 字节）。
+    /// 设备按 PNG 原生像素尺寸原样渲染，不缩放（服务器按 size 预缩放）。
+    Image { common: CardCommon, png: Vec<u8> },
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +149,8 @@ struct RawCard {
     guide: Option<String>,
     // page
     layout: Option<Vec<serde_json::Value>>,
+    // image
+    data: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -252,6 +259,29 @@ fn convert_card(value: &serde_json::Value, max_text_chars: usize, nested: bool) 
                 return None;
             }
             Some(Card::Stamp { common, name, count })
+        }
+        "image" => {
+            use base64::Engine;
+            let common = raw_common(&raw);
+            let Some(data) = raw.data else {
+                eprintln!("riddle: cards: dropping image card with no data");
+                return None;
+            };
+            let png = match base64::engine::general_purpose::STANDARD.decode(data.as_bytes()) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!("riddle: cards: dropping image card with bad base64: {e}");
+                    return None;
+                }
+            };
+            if png.len() > MAX_IMAGE_BYTES {
+                eprintln!(
+                    "riddle: cards: dropping image card of {} bytes (max {MAX_IMAGE_BYTES})",
+                    png.len()
+                );
+                return None;
+            }
+            Some(Card::Image { common, png })
         }
         "count" => {
             let Some(n) = raw.n else {
@@ -457,6 +487,44 @@ fn parse_trace_guide(s: Option<&str>) -> TraceGuide {
 mod tests {
     use super::*;
 
+    // —— helper：造一张 w×h 纯色 RGBA PNG，返回其 base64 —— //
+    fn png_b64(w: u32, h: u32, rgba: [u8; 4]) -> String {
+        use base64::Engine;
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, w, h);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut writer = enc.write_header().unwrap();
+            let data: Vec<u8> = (0..(w * h)).flat_map(|_| rgba).collect();
+            writer.write_image_data(&data).unwrap();
+        }
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    }
+
+    // —— helper：造一张 w×h 渐变/伪随机 RGBA PNG（不易压缩），返回其 base64 —— //
+    fn png_b64_noisy(w: u32, h: u32) -> String {
+        use base64::Engine;
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, w, h);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut writer = enc.write_header().unwrap();
+            let mut data: Vec<u8> = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h {
+                for x in 0..w {
+                    // Cheap deterministic pseudo-noise so the PNG filter/deflate
+                    // stage can't compress runs of identical pixels away.
+                    let n = (x.wrapping_mul(2654435761) ^ y.wrapping_mul(40503)) as u8;
+                    data.extend_from_slice(&[n, n.wrapping_add(x as u8), n.wrapping_add(y as u8), 255]);
+                }
+            }
+            writer.write_image_data(&data).unwrap();
+        }
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    }
+
     const FULL: &str = r#"{
       "v": 1, "turn_id": "t-1", "spoken_text": "哇！",
       "paper_cards": [
@@ -611,5 +679,47 @@ mod tests {
     fn garbage_json_is_an_error_not_a_panic() {
         assert!(parse_turn_response("not json").is_err());
         assert!(parse_turn_response(r#"{"turn_id":1}"#).is_err());
+    }
+
+    #[test]
+    fn parses_image_card_from_inline_base64() {
+        let b64 = png_b64(4, 4, [255, 0, 0, 255]);
+        let json = format!(
+            r#"{{"turn_id":"t","spoken_text":"","paper_cards":[
+                {{"type":"image","data":"{b64}","place":"blank_area","size":"l"}}
+            ],"page_action":"none","memory_tags":[]}}"#
+        );
+        let r = parse_turn_response(&json).unwrap();
+        assert_eq!(r.paper_cards.len(), 1);
+        match &r.paper_cards[0] {
+            Card::Image { png, common } => {
+                assert!(png.starts_with(&[0x89, b'P', b'N', b'G']), "keeps decoded PNG bytes");
+                assert!(matches!(common.place, Place::BlankArea));
+                assert!(matches!(common.size, Size::L));
+            }
+            other => panic!("expected image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn drops_image_card_with_missing_or_bad_data() {
+        let json = r#"{"turn_id":"t","spoken_text":"","paper_cards":[
+            {"type":"image","place":"blank_area"},
+            {"type":"image","data":"@@ not base64 @@"}
+        ],"page_action":"none","memory_tags":[]}"#;
+        let r = parse_turn_response(json).unwrap();
+        assert!(r.paper_cards.is_empty(), "missing data and bad base64 both dropped");
+    }
+
+    #[test]
+    fn drops_oversize_image_card() {
+        // 造一张超过 MAX_IMAGE_BYTES 的 PNG：纯色图会被 deflate 压得极小，
+        // 所以这里用伪随机/渐变像素填充，确保编码后的 PNG 字节数确实 > 1 MB。
+        let b64 = png_b64_noisy(1200, 1200);
+        let json = format!(
+            r#"{{"turn_id":"t","spoken_text":"","paper_cards":[{{"type":"image","data":"{b64}"}}],"page_action":"none","memory_tags":[]}}"#
+        );
+        let r = parse_turn_response(&json).unwrap();
+        assert!(r.paper_cards.is_empty(), "oversize image dropped");
     }
 }
