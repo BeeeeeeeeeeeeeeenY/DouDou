@@ -15,7 +15,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
 
     from app.routers import (admin_curricula, admin_profiles, admin_providers,
                              admin_test, admin_turns, admin_voice, files,
-                             openai_compat, phone)
+                             openai_compat, phone, turn)
 
     app.include_router(admin_providers.router)
     app.include_router(admin_profiles.router)
@@ -25,6 +25,7 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     app.include_router(admin_turns.router)
     app.include_router(openai_compat.router)
     app.include_router(phone.router)
+    app.include_router(turn.router)
     app.include_router(files.router)
 
     import os
