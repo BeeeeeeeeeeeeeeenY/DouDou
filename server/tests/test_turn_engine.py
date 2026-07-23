@@ -13,6 +13,11 @@ SSE = (
     "data: [DONE]\n\n"
 )
 
+DEMO_SSE = (
+    'data: {"choices":[{"delta":{"content":"先画个圆\\n⟦demo:circle⟧"}}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
 NO_MARK_SSE = (
     'data: {"choices":[{"delta":{"content":"我们来数星星呀。"}}]}\n\n'
     "data: [DONE]\n\n"
@@ -177,6 +182,19 @@ async def test_weather_line_injected_and_web_search_flag(app, db):
     assert "今天深圳天气：阵雨，气温 26~31 度，现在 29 度。" in body["messages"][0]["content"]
     assert body["enable_search"] is True
     ambient._cache.update(ts=0.0, line="")
+
+
+@respx.mock
+async def test_turn_runner_exposes_demo_shape(app, db):
+    setup_active_profile(db)
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=DEMO_SSE)
+    )
+    runner = TurnRunner(app.state.sessionmaker, app.state.data_dir,
+                        TurnInput(source="tablet", text="hi"))
+    [_ async for _ in runner.stream()]
+    assert runner.demo_shape == "circle"
+    assert "demo" not in runner.reply_text
 
 
 @respx.mock
