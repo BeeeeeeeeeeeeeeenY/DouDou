@@ -140,6 +140,58 @@ pub fn fetch(json_body: String, tx: Sender<Result<cards::TurnResponse, String>>)
     });
 }
 
+/// `/turn/next` poll response: a pending demo to animate and/or a device
+/// command (e.g. "clear"). Both `None` when nothing is pending or no lesson
+/// is running. Loose: missing/extra fields never fail the poll.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct NextResponse {
+    pub demo: Option<DemoDirective>,
+    pub command: Option<String>,
+}
+
+/// A voice-triggered demo: which shape to draw. `place`/`pace` are advisory
+/// (the device always draws a demo slow in a blank area), kept for wire
+/// completeness.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DemoDirective {
+    pub shape: String,
+    #[allow(dead_code)]
+    pub place: Option<String>,
+    #[allow(dead_code)]
+    pub pace: Option<String>,
+}
+
+/// Parse a `/turn/next` body. Non-JSON is an error; absent fields degrade to
+/// `None` (no demo / no command), never a panic.
+pub fn parse_next(json: &str) -> Result<NextResponse, String> {
+    serde_json::from_str(json).map_err(|e| format!("cards: invalid /turn/next response: {e}"))
+}
+
+/// Poll `GET {RIDDLE_TURN_URL}/next` for a pending demo/command on its own
+/// thread; deliver the parsed result (or error) exactly once on `tx`. In mock
+/// mode (no `RIDDLE_TURN_URL`) there is nothing to poll → an empty response.
+pub fn fetch_next(tx: Sender<Result<NextResponse, String>>) {
+    std::thread::spawn(move || {
+        let Ok(base) = std::env::var("RIDDLE_TURN_URL") else {
+            let _ = tx.send(Ok(NextResponse::default()));
+            return;
+        };
+        let url = format!("{}/next", base.trim_end_matches('/'));
+        let out = match ureq::get(&url).timeout(Duration::from_secs(8)).call() {
+            Ok(r) => r
+                .into_string()
+                .map_err(|e| format!("read response: {e}"))
+                .and_then(|b| parse_next(&b)),
+            Err(ureq::Error::Status(code, r)) => {
+                let detail = r.into_string().unwrap_or_default();
+                Err(format!("http {code}: {}", detail.trim()))
+            }
+            Err(e) => Err(format!("request failed: {e}")),
+        };
+        let _ = tx.send(out);
+    });
+}
+
 /// Whether the structured `/turn` path is configured at all — either a real
 /// endpoint or a local mock file. `main.rs` gates its whole new commit path
 /// on this; when it's false, behavior is bit-for-bit the legacy oracle path.
@@ -194,6 +246,22 @@ mod tests {
         let p2 = &v["new_strokes"][0][2];
         assert_eq!(p2[0].as_f64().unwrap(), 1.0, "x clamps to 1.0 past the screen edge: {p2:?}");
         assert_eq!(p2[1].as_f64().unwrap(), 1.0, "y clamps to 1.0 past the screen edge: {p2:?}");
+    }
+
+    #[test]
+    fn parse_next_reads_demo_command_and_nulls() {
+        let a = parse_next(r#"{"demo":{"shape":"circle","place":"blank_area","pace":"slow"},"command":null}"#).unwrap();
+        assert_eq!(a.demo.unwrap().shape, "circle");
+        assert!(a.command.is_none());
+
+        let b = parse_next(r#"{"demo":null,"command":"clear"}"#).unwrap();
+        assert!(b.demo.is_none());
+        assert_eq!(b.command.as_deref(), Some("clear"));
+
+        let c = parse_next(r#"{"demo":null,"command":null}"#).unwrap();
+        assert!(c.demo.is_none() && c.command.is_none());
+
+        assert!(parse_next("not json").is_err());
     }
 
     #[test]

@@ -795,6 +795,17 @@ fn run() -> std::io::Result<()> {
     // Takeover swaps are cheap and synchronous; qtfb needs coalescing.
     let flush_every = if takeover { Duration::from_millis(8) } else { Duration::from_millis(35) };
 
+    // 语音触发演示（Plan 2）：turn 模式下空闲时轮询 /turn/next 取待演示/命令。
+    // next_poll 是独立于笔触的自由计时器——last_pen 只在落笔/抬笔才更新，孩子
+    // 一直不动笔时它永远是 None，所以演示轮询需要自己的时钟。poll_rx 是在飞的
+    // 那一次后台轮询（收到结果前不再发新的）。
+    let demo_poll_every = Duration::from_millis(
+        (std::env::var("RIDDLE_DEMO_POLL_SECS").ok().and_then(|s| s.parse::<f64>().ok()).unwrap_or(1.5)
+            * 1000.0) as u64,
+    );
+    let mut next_poll = Instant::now() + demo_poll_every;
+    let mut poll_rx: Option<mpsc::Receiver<Result<turn::NextResponse, String>>> = None;
+
     eprintln!("riddle: the diary is open");
     draw_lesson_badge(&mut surf, &disp); // 上课模式：顶部徽标标示已生效
 
@@ -1132,7 +1143,49 @@ fn run() -> std::io::Result<()> {
                         }
                     }
                 }
-                _ => State::Listening { last_pen },
+                _ => {
+                    // 空闲：turn 模式下轮询 /turn/next 取待演示/命令（后台线程，不阻塞画笔）。
+                    let mut demo_plans: Option<Vec<cardrender::RenderPlan>> = None;
+                    if turn::turn_mode_enabled() && !pen_down {
+                        if poll_rx.is_none() && Instant::now() >= next_poll {
+                            let (tx, rx) = mpsc::channel();
+                            turn::fetch_next(tx);
+                            poll_rx = Some(rx);
+                            next_poll = Instant::now() + demo_poll_every;
+                        }
+                        if let Some(rx) = poll_rx.take() {
+                            match rx.try_recv() {
+                                Ok(Ok(next)) => {
+                                    // 先执行清屏命令，再看有无演示。
+                                    if next.command.as_deref() == Some("clear") {
+                                        eprintln!("riddle: /turn/next: clear");
+                                        turn_the_page(
+                                            &mut surf, &disp, &mut user_ink,
+                                            &mut committed_strokes, &mut page_id,
+                                        );
+                                    }
+                                    if let Some(demo) = next.demo {
+                                        let mut map = layout::InkMap::from_surface(&surf);
+                                        let plans = cardrender::plan_demo(&demo.shape, &mut map);
+                                        if !plans.is_empty() {
+                                            eprintln!("riddle: /turn/next: demo {:?}", demo.shape);
+                                            demo_plans = Some(plans);
+                                        }
+                                    }
+                                }
+                                Ok(Err(e)) => eprintln!("riddle: /turn/next failed: {e}"),
+                                Err(mpsc::TryRecvError::Empty) => poll_rx = Some(rx), // 放回，下轮再取
+                                Err(mpsc::TryRecvError::Disconnected) => {}
+                            }
+                        }
+                    }
+                    match demo_plans {
+                        Some(plans) => State::DrawingCards {
+                            plans, plan_i: 0, point_i: 0, next: Instant::now(), page_full: false,
+                        },
+                        None => State::Listening { last_pen },
+                    }
+                }
             },
 
             State::Thinking { rx, pulse, blot_on, since, origin, page_full } => match rx.try_recv() {
@@ -1556,6 +1609,12 @@ fn run() -> std::io::Result<()> {
                 None => State::Listening { last_pen: None },
             },
         };
+
+        // 一旦离开空闲态（真回合在飞 / 正在画卡），丢弃在飞的演示轮询，
+        // 免得真回合结束后又冒出一个过期演示。
+        if !matches!(state, State::Listening { .. }) {
+            poll_rx = None;
+        }
 
         stylus_tapped = false;
         std::thread::sleep(Duration::from_millis(2));

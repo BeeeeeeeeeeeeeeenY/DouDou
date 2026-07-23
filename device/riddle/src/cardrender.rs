@@ -406,6 +406,24 @@ fn plan_sketch(
     out
 }
 
+/// A voice-triggered demonstration: turn a shape name (from `/turn/next`'s
+/// `demo.shape`) into the same solid-ink slow sketch a `Sketch` card would
+/// draw, placed in a blank area so it never covers the child's ink. Empty
+/// for an unknown shape or a full page — the caller just skips the demo.
+pub fn plan_demo(shape: &str, map: &mut layout::InkMap) -> Vec<RenderPlan> {
+    let Some(strokes) = shape_strokes(shape) else {
+        eprintln!("riddle: demo dropped (unknown shape {shape:?})");
+        return Vec::new();
+    };
+    let common = cards::CardCommon {
+        place: cards::Place::BlankArea,
+        anchor_norm: None,
+        size: cards::Size::M,
+        pace: cards::Pace::Slow, // 慢速逐笔，孩子看得清笔序
+    };
+    plan_sketch(&common, &strokes, map, layout::Anchor::None)
+}
+
 fn sketch_plan_in_rect(
     common: &cards::CardCommon,
     strokes: &[Vec<(f32, f32)>],
@@ -1091,6 +1109,25 @@ mod tests {
 
     fn common(place: Place, size: Size) -> CardCommon {
         CardCommon { place, anchor_norm: None, size, pace: Pace::Normal }
+    }
+
+    #[test]
+    fn plan_demo_circle_yields_slow_solid_ink_sketch_in_bounds() {
+        let mut map = InkMap::new(1620, 2160);
+        let plans = plan_demo("circle", &mut map);
+        assert_eq!(plans.len(), 1, "one demo sketch plan");
+        let p = &plans[0];
+        assert!(!p.strokes.is_empty(), "circle carries ink");
+        assert_eq!(p.color, surface::BLACK, "实心墨迹，非淡墨骨架");
+        assert_eq!(p.points_per_frame, ppf(Pace::Slow), "慢速逐笔");
+        let (x, y, w, h) = p.region.rect();
+        assert!(x >= 0 && y >= 0 && x + w <= 1620 && y + h <= 2160, "in bounds: {:?}", p.region.rect());
+    }
+
+    #[test]
+    fn plan_demo_unknown_shape_is_empty() {
+        let mut map = InkMap::new(1620, 2160);
+        assert!(plan_demo("banana", &mut map).is_empty());
     }
 
     #[test]
