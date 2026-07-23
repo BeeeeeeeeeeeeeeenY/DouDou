@@ -55,3 +55,22 @@ def test_migration_idempotent_on_second_startup(tmp_path):
     maker = make_sessionmaker(str(tmp_path))  # 第二次启动不得抛错
     with maker() as s:
         s.execute(text("SELECT lesson_run_id FROM turns"))
+
+
+def test_lesson_run_pending_fields_default_none_and_settable(db):
+    from app import models
+    lesson = db.query(models.Lesson).first()
+    if lesson is None:
+        cur = models.Curriculum(slug="t", title="t")
+        db.add(cur); db.flush()
+        lesson = models.Lesson(curriculum_id=cur.id, seq=1, slug="t-1", title="t")
+        db.add(lesson); db.flush()
+    run = models.LessonRun(lesson_id=lesson.id)
+    db.add(run); db.commit()
+    assert run.pending_demo is None and run.pending_command is None
+    run.pending_demo = "circle"
+    run.pending_command = "clear"
+    db.commit()
+    db.expire_all()
+    got = db.get(models.LessonRun, run.id)
+    assert got.pending_demo == "circle" and got.pending_command == "clear"

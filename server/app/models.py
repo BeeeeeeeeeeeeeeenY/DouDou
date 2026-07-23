@@ -117,3 +117,5 @@ class LessonRun(Base):
     memory_tags: Mapped[list | None] = mapped_column(JSON, nullable=True)  # 一期恒 NULL，二期记忆挂载点
     artifact_turn_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     parent_note: Mapped[str] = mapped_column(Text, default="")
+    pending_demo: Mapped[str | None] = mapped_column(String(20), nullable=True)      # 房间待演示形状，取用即清
+    pending_command: Mapped[str | None] = mapped_column(String(20), nullable=True)   # 房间待执行命令（如 clear），取用即清

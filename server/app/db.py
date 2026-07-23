@@ -20,6 +20,8 @@ def _migrate(engine) -> None:
     _ensure_column(engine, "turns", "lesson_run_id", "lesson_run_id INTEGER")
     _ensure_column(engine, "turns", "cards_json", "cards_json JSON")
     _ensure_column(engine, "profiles", "web_search", "web_search BOOLEAN DEFAULT 0")
+    _ensure_column(engine, "lesson_runs", "pending_demo", "pending_demo VARCHAR(20)")
+    _ensure_column(engine, "lesson_runs", "pending_command", "pending_command VARCHAR(20)")
 
 
 def make_sessionmaker(data_dir: str):
