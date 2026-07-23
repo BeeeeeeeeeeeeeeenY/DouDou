@@ -284,3 +284,57 @@ def test_clear_board_sets_pending_command(client, db):
 def test_clear_board_without_running_lesson(client, db):
     j = client.post("/api/phone/clear-board").json()
     assert j["ok"] is False
+
+
+@respx.mock
+def test_demo_fires_once_per_run(client, db):
+    """演示形状每 run 仅触发一次。连发两条都带 ⟦demo:circle⟧ 的 voice-turn；
+    第一条后 pending_demo=='circle' 且 demoed_shapes==['circle']；
+    取用清 pending_demo（模拟平板取走）后发第二条 → pending_demo 仍为 None，
+    demoed_shapes 仍 ['circle']。"""
+    setup_course(client)
+    run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
+
+    # Mock API responses
+    respx.post("https://up.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "该画了"})
+    )
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=sse_reply("我们先画一个圆圆的\n⟦demo:circle⟧"))
+    )
+    respx.post("https://up.test/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"MP3")
+    )
+
+    # 第一条 voice-turn：带 demo:circle 标记
+    j1 = client.post(
+        "/api/phone/voice-turn",
+        files={"audio": ("a.webm", b"x", "audio/webm")},
+        data={"history": "[]", "lesson_run_id": str(run_id)}
+    ).json()
+
+    # 第一条后：pending_demo 已设，demoed_shapes 已记
+    run1 = db.get(models.LessonRun, run_id)
+    assert run1.pending_demo == "circle", f"After first turn, pending_demo should be 'circle', got {run1.pending_demo}"
+    assert run1.demoed_shapes == ["circle"], f"After first turn, demoed_shapes should be ['circle'], got {run1.demoed_shapes}"
+
+    # 模拟平板取走 pending_demo：清空挂靠，但 demoed_shapes 保留
+    run1.pending_demo = None
+    db.commit()
+
+    # 验证清理后的状态
+    run_after_clear = db.get(models.LessonRun, run_id)
+    assert run_after_clear.pending_demo is None
+    assert run_after_clear.demoed_shapes == ["circle"]
+
+    # 第二条 voice-turn：仍带 demo:circle 标记，但不应重复设置
+    j2 = client.post(
+        "/api/phone/voice-turn",
+        files={"audio": ("b.webm", b"x", "audio/webm")},
+        data={"history": "[]", "lesson_run_id": str(run_id)}
+    ).json()
+
+    # 第二条后：pending_demo 应保持 None（未再设），demoed_shapes 保持不变
+    run2 = db.get(models.LessonRun, run_id)
+    assert run2.pending_demo is None, f"After second turn, pending_demo should remain None, got {run2.pending_demo}"
+    assert run2.demoed_shapes == ["circle"], f"After second turn, demoed_shapes should remain ['circle'], got {run2.demoed_shapes}"

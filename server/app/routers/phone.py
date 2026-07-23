@@ -178,8 +178,11 @@ async def voice_turn(
             run = db.get(LessonRun, active_run_id)
             if run is not None and run.status == "running":
                 if runner.demo_shape:
-                    run.pending_demo = runner.demo_shape  # 语音教学掐点：挂待演示
-                    db.commit()   # 立即持久化，别被 TTS 失败分支吞掉
+                    done = list(run.demoed_shapes or [])
+                    if runner.demo_shape not in done:
+                        run.pending_demo = runner.demo_shape
+                        run.demoed_shapes = done + [runner.demo_shape]
+                        db.commit()
                 # 未开画不关课：孩子还没在平板上画东西前，模型的收尾/打标一律
                 # 忽略，房间继续 running。守住房间，避免刚打招呼就被判未参与关课
                 # →房间死→语音豆豆取不到本房间图开始瞎编画。打标行已在引擎剥离、
