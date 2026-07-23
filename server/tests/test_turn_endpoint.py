@@ -64,6 +64,7 @@ def test_turn_runs_model_and_returns_cards(client, db):
     r = client.post("/turn", json=body)
     assert r.status_code == 200
     j = r.json()
+    assert j["v"] == 1 and j["turn_id"] == "t-1"  # 信封契约（设备据此解析）
     assert j["spoken_text"] == "哇，三颗星星！"
     assert len(j["paper_cards"]) == 1 and j["paper_cards"][0]["name"] == "star"
     assert j["memory_tags"] == ["star"]
