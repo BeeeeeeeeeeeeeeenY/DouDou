@@ -5,33 +5,83 @@ type CurrentLesson = { available: boolean; lesson_seq?: number; lesson_title?: s
 
 const REPORT_LABEL = { completed: '完成', partial: '部分完成', skipped: '未参与' } as Record<string, string>
 
+// VAD 阈值（真机需微调）：START 说话起判、STOP 静音判、SILENCE_MS 说完一句静默多久发、
+// MAX_MS 单句上限防跑飞、MIN_MS 太短丢弃（避免咳嗽/噪声误触）。
+const START_THRESH = 0.045
+const STOP_THRESH = 0.025
+const SILENCE_MS = 1200
+const MAX_MS = 12000
+const MIN_MS = 350
+
 export default function Phone() {
   const [bubbles, setBubbles] = useState<Bubble[]>([])
-  const [state, setState] = useState<'idle' | 'recording' | 'thinking'>('idle')
+  // idle=在听 / thinking=豆豆想 / speaking=豆豆在说；录音是 VAD 自动的，不再有"按住"态。
+  const [status, setStatus] = useState<'idle' | 'thinking' | 'speaking'>('idle')
+  const [muted, setMuted] = useState(false)
   const [error, setError] = useState('')
   const [lesson, setLesson] = useState<CurrentLesson>({ available: false })
   const [runId, setRunId] = useState<number | null>(null)
   const [runTitle, setRunTitle] = useState('')
-  const recRef = useRef<MediaRecorder | null>(null)
+
   const historyRef = useRef<[string, string][]>([])
-  const runRef = useRef<number | null>(null)
-  runRef.current = runId
-  const stateRef = useRef(state)
-  stateRef.current = state
+  const runRef = useRef<number | null>(null); runRef.current = runId
+  const mutedRef = useRef(muted); mutedRef.current = muted
+  // 豆豆在说话或正在想时，绝不收音（否则会把豆豆自己的声音/回声当成孩子说话）。
+  const busyRef = useRef(false)
+  const statusRef = useRef(status); statusRef.current = status
 
   useEffect(() => {
     fetch('/api/phone/current-lesson').then(r => r.json()).then(setLesson).catch(() => {})
   }, [])
 
-  // 双通道联动：上课中后台轮询 /api/phone/next——孩子在平板上画完，服务器把
-  // 豆豆的下一句话入队，这里取到就自动播报+续气泡，不用家长再按说话。
-  // 服务端 clear-on-fetch 保证每句只给一次，无需前端去重。
+  // 播放豆豆语音：播放期间挂 busy（暂停收音），播完/失败恢复。
+  const speak = (url?: string) => {
+    if (!url) return
+    busyRef.current = true
+    setStatus('speaking')
+    const a = new Audio(url)
+    const done = () => { busyRef.current = false; if (statusRef.current === 'speaking') setStatus('idle') }
+    a.onended = done
+    a.onerror = done
+    a.play().catch(done)
+  }
+
+  // 一句录好（VAD 判定说完）后发给服务器，播豆豆回复。
+  const sendUtterance = async (blob: Blob, ext: string) => {
+    busyRef.current = true
+    setStatus('thinking')
+    try {
+      const fd = new FormData()
+      fd.append('audio', blob, `say.${ext}`)
+      fd.append('history', JSON.stringify(historyRef.current.slice(-5)))
+      if (runRef.current != null) fd.append('lesson_run_id', String(runRef.current))
+      const resp = await fetch('/api/phone/voice-turn', { method: 'POST', body: fd })
+      if (!resp.ok) throw new Error((await resp.json()).detail ?? `HTTP ${resp.status}`)
+      const j = await resp.json()
+      historyRef.current.push([j.transcript, j.reply_text])
+      setBubbles(b => [...b, { role: 'user', text: j.transcript }, { role: 'assistant', text: j.reply_text }])
+      if (j.lesson_report) {
+        const label = REPORT_LABEL[j.lesson_report.status] ?? j.lesson_report.status
+        setBubbles(b => [...b, {
+          role: 'system',
+          text: `⭐ 今天的课${label}啦！\n亮点：${j.lesson_report.highlights}\n在家可以试试：${j.lesson_report.parent_tip}`,
+        }])
+        setRunId(null); setRunTitle('')
+        fetch('/api/phone/current-lesson').then(r => r.json()).then(setLesson).catch(() => {})
+      }
+      if (j.audio_url) speak(j.audio_url)     // 播完在 speak 里恢复 busy/idle
+      else { busyRef.current = false; setStatus('idle') }
+    } catch (e) {
+      setError(String(e)); busyRef.current = false; setStatus('idle')
+    }
+  }
+
+  // 双通道联动：上课中后台轮询 /api/phone/next——孩子在平板上画完，服务器把豆豆
+  // 的下一句入队，这里取到自动播报+续气泡。只在空闲(不在说/想/收音)时取播。
   useEffect(() => {
     if (runId == null) return
     const id = setInterval(async () => {
-      // 只在空闲时取播——孩子正按住说话/豆豆正在想时不取（clear-on-fetch，
-      // 取了就没了；不取则留到空闲再播），避免自动播报串进麦克风或两声齐响。
-      if (stateRef.current !== 'idle') return
+      if (busyRef.current || statusRef.current !== 'idle') return
       try {
         const r = await fetch('/api/phone/next')
         if (!r.ok) return
@@ -39,12 +89,85 @@ export default function Phone() {
         if (u && u.text) {
           historyRef.current.push(['（孩子在平板上画完了）', u.text])
           setBubbles(b => [...b, { role: 'assistant', text: u.text }])
-          if (u.audio_url) new Audio(u.audio_url).play().catch(() => {})
+          speak(u.audio_url)
         }
-      } catch { /* 网络抖动：忽略，下轮再试 */ }
-    }, 1500)
+      } catch { /* 网络抖动：忽略 */ }
+    }, 1200)
     return () => clearInterval(id)
   }, [runId])
+
+  // 持续收音 + VAD：上课中且未静音时常开麦，自动判断说完一句就发。豆豆说话/想时
+  // (busyRef) 不收。静音或下课时彻底关麦。真机阈值可调（见文件顶常量）。
+  useEffect(() => {
+    if (runId == null || muted) return
+    let stream: MediaStream | null = null
+    let ctx: AudioContext | null = null
+    let raf = 0
+    let cancelled = false
+    let rec: MediaRecorder | null = null
+    let recording = false
+    let chunks: Blob[] = []
+    let recStart = 0
+    let silenceStart = 0
+    let ext = 'webm'
+
+    const setup = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
+        rec = new MediaRecorder(stream)
+        const mime = rec.mimeType || 'audio/webm'
+        ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm'
+        rec.ondataavailable = e => chunks.push(e.data)
+        rec.onstop = () => {
+          const dur = performance.now() - recStart
+          const blob = new Blob(chunks, { type: mime })
+          chunks = []
+          if (dur >= MIN_MS && blob.size > 0 && !mutedRef.current) sendUtterance(blob, ext)
+        }
+        ctx = new AudioContext()
+        const src = ctx.createMediaStreamSource(stream)
+        const analyser = ctx.createAnalyser()
+        analyser.fftSize = 1024
+        src.connect(analyser)
+        const buf = new Uint8Array(analyser.fftSize)
+        const tick = () => {
+          if (cancelled) return
+          analyser.getByteTimeDomainData(buf)
+          let sum = 0
+          for (let i = 0; i < buf.length; i++) { const x = (buf[i] - 128) / 128; sum += x * x }
+          const rms = Math.sqrt(sum / buf.length)
+          const now = performance.now()
+          if (busyRef.current) {
+            // 豆豆在说/想：若正录着就丢弃这段（大概率是回声）
+            if (recording && rec && rec.state === 'recording') { chunks = []; recStart = now; }
+          } else if (!recording) {
+            if (rms > START_THRESH && rec && rec.state === 'inactive') {
+              chunks = []; recStart = now; silenceStart = 0; recording = true; rec.start()
+            }
+          } else {
+            if (rms < STOP_THRESH) {
+              if (!silenceStart) silenceStart = now
+              else if (now - silenceStart > SILENCE_MS) { recording = false; rec?.stop() }
+            } else silenceStart = 0
+            if (now - recStart > MAX_MS) { recording = false; rec?.stop() }
+          }
+          raf = requestAnimationFrame(tick)
+        }
+        raf = requestAnimationFrame(tick)
+      } catch {
+        setError('无法使用麦克风：请确认已用 https 打开本页并允许麦克风权限')
+      }
+    }
+    setup()
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+      try { if (rec && rec.state === 'recording') rec.stop() } catch { /* ignore */ }
+      stream?.getTracks().forEach(t => t.stop())
+      ctx?.close().catch(() => {})
+    }
+  }, [runId, muted])
 
   const startLesson = async () => {
     setError('')
@@ -58,8 +181,7 @@ export default function Phone() {
       const opening: Bubble[] = [{ role: 'system', text: `开始上课：第 ${j.lesson_seq} 课《${j.lesson_title}》` }]
       if (j.greeting_text) opening.push({ role: 'assistant', text: j.greeting_text })
       setBubbles(opening)
-      // 豆豆开课先开口（固定暖句 + TTS），孩子再按住说话回应
-      if (j.greeting_audio_url) new Audio(j.greeting_audio_url).play().catch(() => {})
+      speak(j.greeting_audio_url)   // 开课先开口，播完自动进入"在听"
     } catch (e) { setError(String(e)) }
   }
 
@@ -67,58 +189,11 @@ export default function Phone() {
     if (runRef.current != null) {
       await fetch(`/api/phone/lesson-runs/${runRef.current}/end`, { method: 'POST' }).catch(() => {})
     }
-    setRunId(null)
-    setRunTitle('')
+    setRunId(null); setRunTitle(''); setStatus('idle'); busyRef.current = false
     fetch('/api/phone/current-lesson').then(r => r.json()).then(setLesson).catch(() => {})
   }
 
-  const start = async () => {
-    if (state !== 'idle') return
-    setError('')
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const rec = new MediaRecorder(stream)
-      const mime = rec.mimeType || 'audio/webm'
-      const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm'
-      const chunks: Blob[] = []
-      rec.ondataavailable = e => chunks.push(e.data)
-      rec.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop())
-        setState('thinking')
-        const fd = new FormData()
-        fd.append('audio', new Blob(chunks, { type: mime }), `say.${ext}`)
-        fd.append('history', JSON.stringify(historyRef.current.slice(-5)))
-        if (runRef.current != null) fd.append('lesson_run_id', String(runRef.current))
-        try {
-          const resp = await fetch('/api/phone/voice-turn', { method: 'POST', body: fd })
-          if (!resp.ok) throw new Error((await resp.json()).detail ?? `HTTP ${resp.status}`)
-          const j = await resp.json()
-          historyRef.current.push([j.transcript, j.reply_text])
-          setBubbles(b => [...b, { role: 'user', text: j.transcript }, { role: 'assistant', text: j.reply_text }])
-          if (j.audio_url) new Audio(j.audio_url).play().catch(() => {})
-          if (j.lesson_report) {
-            const label = REPORT_LABEL[j.lesson_report.status] ?? j.lesson_report.status
-            setBubbles(b => [...b, {
-              role: 'system',
-              text: `⭐ 今天的课${label}啦！\n亮点：${j.lesson_report.highlights}\n在家可以试试：${j.lesson_report.parent_tip}`,
-            }])
-            setRunId(null)
-            setRunTitle('')
-            fetch('/api/phone/current-lesson').then(r => r.json()).then(setLesson).catch(() => {})
-          }
-        } catch (e) {
-          setError(String(e))
-        } finally { setState('idle') }
-      }
-      recRef.current = rec
-      rec.start()
-      setState('recording')
-    } catch {
-      setError('无法使用麦克风：请确认已用 https 打开本页并允许麦克风权限')
-    }
-  }
-
-  const stop = () => { if (state === 'recording') recRef.current?.stop() }
+  const statusText = muted ? '已静音' : status === 'speaking' ? '豆豆在说…' : status === 'thinking' ? '豆豆在想…' : '在听你说呀'
 
   return (
     <div style={{
@@ -165,14 +240,18 @@ export default function Phone() {
         {error && <p style={{ color: 'red', textAlign: 'center' }}>{error}</p>}
       </div>
       <div style={{ padding: 24, textAlign: 'center' }}>
+        <div style={{ marginBottom: 10, fontSize: 15, color: '#888' }}>
+          {runId != null ? statusText : '按上面绿色按钮开始上课'}
+        </div>
         <button
-          onPointerDown={start} onPointerUp={stop} onPointerLeave={stop}
+          onClick={() => setMuted(m => !m)}
+          disabled={runId == null}
           style={{
-            width: 120, height: 120, borderRadius: '50%', border: 'none', fontSize: 18,
-            color: '#fff', touchAction: 'none', userSelect: 'none', WebkitUserSelect: 'none',
-            background: state === 'recording' ? '#ff4d4f' : state === 'thinking' ? '#d9d9d9' : '#1677ff',
+            width: 120, height: 120, borderRadius: '50%', border: 'none', fontSize: 17,
+            color: '#fff', userSelect: 'none', WebkitUserSelect: 'none',
+            background: runId == null ? '#d9d9d9' : muted ? '#ff4d4f' : '#52c41a',
           }}>
-          {state === 'recording' ? '松开提问' : state === 'thinking' ? '豆豆想…' : '按住说话'}
+          {muted ? '🔇\n已静音' : '🎙️\n听着呢'}
         </button>
       </div>
     </div>
