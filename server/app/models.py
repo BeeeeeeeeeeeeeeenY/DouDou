@@ -123,3 +123,4 @@ class LessonRun(Base):
     pending_utterance: Mapped[dict | None] = mapped_column(JSON, nullable=True)      # 待手机播报 {text, audio_url}
     tablet_turns: Mapped[int] = mapped_column(default=0)                             # 本 run 平板提交计数（图节流）
     last_image_turn: Mapped[int] = mapped_column(default=0)                          # 上次出图时的 tablet_turns
+    pending_swatches: Mapped[list | None] = mapped_column(JSON, nullable=True)       # 待平板显示的选色盘颜色，取用即清

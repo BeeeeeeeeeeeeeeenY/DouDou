@@ -6,7 +6,7 @@ from typing import AsyncIterator
 
 from app.engine.errors import ConfigError
 from app.engine.ambient import weather_line
-from app.engine.lesson import parse_demo, parse_lesson_report
+from app.engine.lesson import parse_colors, parse_demo, parse_lesson_report
 from app.engine.prompt import assemble_system_prompt, time_context
 from app.engine.transcript import split_transcript
 from app.engine.upstream import UpstreamError, build_chat_body, stream_chat
@@ -49,6 +49,7 @@ class TurnRunner:
         self.lesson_report: dict | None = None
         self.lesson_report_raw = ""
         self.demo_shape: str | None = None
+        self.colors: list[str] | None = None
 
     def _save_file(self, sub: str, ext: str, data: bytes) -> str:
         rel = f"{sub}/{uuid.uuid4().hex}.{ext}"
@@ -128,10 +129,12 @@ class TurnRunner:
             visible, post = split_transcript("".join(full))
             clean, report, raw = parse_lesson_report(visible)
             clean, demo_shape = parse_demo(clean)  # demo 标记同样剥离、绝不外显
+            clean, colors = parse_colors(clean)    # 选色盘标记同样剥离
             self.reply_text = clean
             self.lesson_report = report
             self.lesson_report_raw = raw
             self.demo_shape = demo_shape
+            self.colors = colors
             if post:  # 语音/测试轮无 ⁂ 时保留 STT 转写
                 self.transcript = post
             turn.reply_text, turn.transcript = self.reply_text, self.transcript

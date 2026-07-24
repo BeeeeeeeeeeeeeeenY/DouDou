@@ -182,3 +182,24 @@ def test_parse_demo_absent_returns_text_unchanged():
 def test_parse_demo_unclosed_marker_truncates():
     clean, shape = parse_demo("画个圆 ⟦demo:circle")
     assert shape is None and clean == "画个圆"
+
+
+from app.engine.lesson import parse_colors
+
+
+def test_parse_colors_extracts_clean_set_and_strips():
+    clean, colors = parse_colors("你喜欢什么颜色呀？\n⟦colors:blue,yellow,green⟧")
+    assert colors == ["blue", "yellow", "green"]
+    assert "colors" not in clean and clean == "你喜欢什么颜色呀？"
+
+
+def test_parse_colors_filters_unknown_and_dedups():
+    clean, colors = parse_colors("选吧 ⟦colors:red,blue,blue,pink,green⟧")
+    assert colors == ["blue", "green"]      # red/pink 偏色不入盘；blue 去重
+    assert "colors" not in clean
+
+
+def test_parse_colors_absent_or_all_unknown():
+    assert parse_colors("普通话") == ("普通话", None)
+    clean, colors = parse_colors("x ⟦colors:red,pink⟧")
+    assert colors is None and "colors" not in clean

@@ -181,12 +181,14 @@ def turn_next(request: Request):
         run = (db.query(LessonRun).filter(LessonRun.status == "running")
                .order_by(LessonRun.id.desc()).first())
         if run is None:
-            return {"demo": None, "command": None}
+            return {"demo": None, "command": None, "swatches": None}
         demo = None
         if run.pending_demo:
             demo = {"shape": run.pending_demo, "place": "blank_area", "pace": "slow"}
             run.pending_demo = None
         command = run.pending_command or None
         run.pending_command = None
+        swatches = run.pending_swatches or None
+        run.pending_swatches = None
         db.commit()
-        return {"demo": demo, "command": command}
+        return {"demo": demo, "command": command, "swatches": swatches}

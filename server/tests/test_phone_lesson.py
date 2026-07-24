@@ -359,3 +359,20 @@ def test_phone_next_serves_and_clears(client, db):
 
 def test_phone_next_no_running_run_is_empty(client, db):
     assert client.get("/api/phone/next").json() == {"utterance": None}
+
+
+@respx.mock
+def test_voice_turn_sets_pending_swatches(client, db):
+    setup_course(client)
+    run_id = client.post("/api/phone/lesson-runs").json()["lesson_run_id"]
+    respx.post("https://up.test/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "开始"}))
+    respx.post("https://up.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=sse_reply("你喜欢什么颜色呀？\n⟦colors:blue,yellow,green⟧")))
+    respx.post("https://up.test/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"MP3"))
+    j = client.post("/api/phone/voice-turn",
+                    files={"audio": ("a.webm", b"x", "audio/webm")},
+                    data={"history": "[]", "lesson_run_id": str(run_id)}).json()
+    assert "colors" not in j["reply_text"]
+    assert db.get(models.LessonRun, run_id).pending_swatches == ["blue", "yellow", "green"]

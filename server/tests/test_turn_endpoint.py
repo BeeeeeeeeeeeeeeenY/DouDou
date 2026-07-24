@@ -177,7 +177,7 @@ def test_turn_next_returns_and_clears_command(client, db):
 
 
 def test_turn_next_no_running_run_is_empty(client, db):
-    assert client.get("/turn/next").json() == {"demo": None, "command": None}
+    assert client.get("/turn/next").json() == {"demo": None, "command": None, "swatches": None}
 
 
 @respx.mock
@@ -264,3 +264,14 @@ def test_turn_queues_phone_utterance(client, db):
     assert run.pending_utterance
     assert "气球" in run.pending_utterance["text"]
     assert "audio_url" in run.pending_utterance
+
+
+def test_turn_next_serves_and_clears_swatches(client, db):
+    from app import models
+    _setup_course(client, db)
+    run = models.LessonRun(lesson_id=db.query(models.Lesson).first().id,
+                           status="running", pending_swatches=["blue", "green", "yellow"])
+    db.add(run); db.commit()
+    j = client.get("/turn/next").json()
+    assert j["swatches"] == ["blue", "green", "yellow"]
+    assert client.get("/turn/next").json()["swatches"] is None   # clear-on-fetch

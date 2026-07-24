@@ -197,6 +197,9 @@ async def voice_turn(
                         run.pending_demo = runner.demo_shape
                         run.demoed_shapes = done + [runner.demo_shape]
                         db.commit()
+                if runner.colors:  # 语音问颜色那句：挂选色盘给平板显示
+                    run.pending_swatches = runner.colors
+                    db.commit()
                 # 未开画不关课：孩子还没在平板上画东西前，模型的收尾/打标一律
                 # 忽略，房间继续 running。守住房间，避免刚打招呼就被判未参与关课
                 # →房间死→语音豆豆取不到本房间图开始瞎编画。打标行已在引擎剥离、

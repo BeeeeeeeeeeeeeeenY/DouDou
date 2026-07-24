@@ -11,6 +11,9 @@ VALID_REPORT_STATUS = ("completed", "partial", "skipped")
 DEMO_MARK = "⟦demo:"
 DEMO_END = "⟧"
 DEMO_SHAPES = ("circle",)
+COLORS_MARK = "⟦colors:"
+# 平板能干净渲染的标定色（蓝/绿/黄）；红/橙/粉偏色不进选色盘。
+COLOR_NAMES = ("blue", "green", "yellow")
 
 
 def parse_lesson_report(text: str) -> tuple[str, dict | None, str]:
@@ -42,6 +45,25 @@ def parse_demo(text: str) -> tuple[str, str | None]:
     shape = text[idx + len(DEMO_MARK):end].strip()
     clean = (text[:idx] + text[end + len(DEMO_END):]).strip()
     return clean, (shape if shape in DEMO_SHAPES else None)
+
+
+def parse_colors(text: str) -> tuple[str, list[str] | None]:
+    """抽出并剥离 ⟦colors:a,b,c⟧ 标记（选色盘触发，绝不外显/念）。只保留
+    COLOR_NAMES 内的干净色、去重保序；一个都不剩则记 None。返回 (clean, colors|None)。"""
+    idx = text.find(COLORS_MARK)
+    if idx == -1:
+        return text, None
+    end = text.find(DEMO_END, idx + len(COLORS_MARK))
+    if end == -1:
+        return text[:idx].strip(), None
+    raw = text[idx + len(COLORS_MARK):end]
+    clean = (text[:idx] + text[end + len(DEMO_END):]).strip()
+    seen: list[str] = []
+    for c in raw.split(","):
+        c = c.strip().lower()
+        if c in COLOR_NAMES and c not in seen:
+            seen.append(c)
+    return clean, (seen or None)
 
 
 def active_current_lesson(db) -> tuple[Curriculum, Lesson] | None:
