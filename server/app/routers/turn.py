@@ -193,16 +193,44 @@ class PickBody(BaseModel):
     color: str = ""
 
 
+_COLOR_CN = {"blue": "蓝", "green": "绿", "yellow": "黄"}
+
+
 @router.post("/turn/pick")
-def turn_pick(body: PickBody, request: Request):
-    """平板按位置报告孩子圈/点选中的颜色（不靠模型看图猜）。挂到当前房间，
-    语音回合据此让 DouDou 说对颜色。"""
+async def turn_pick(body: PickBody, request: Request):
+    """平板按位置报告孩子圈/点选中的颜色（不靠模型看图猜）。**主动联动**：设备选完
+    颜色就地清屏，这里也主动——① 队列一句语音确认让手机自动播（不用孩子说"选好了"），
+    ② 触发演示画圆。让选完颜色→语音确认+平板演示一气呵成、两端都主动。"""
     color = (body.color or "").strip().lower()
+    cn = _COLOR_CN.get(color, color)
     with request.app.state.sessionmaker() as db:
         run = (db.query(LessonRun).filter(LessonRun.status == "running")
                .order_by(LessonRun.id.desc()).first())
         if run is None or not color:
             return {"ok": False}
         run.selected_color = color
+        done = list(run.demoed_shapes or [])
+        if "circle" not in done:                 # 主动触发画圆演示（每 run 仍只一次）
+            run.pending_demo = "circle"
+            run.demoed_shapes = done + ["circle"]
         db.commit()
-        return {"ok": True, "color": color}
+        run_id = run.id
+    # 主动语音确认 + 引导，合成 TTS 入队给手机自动播报
+    text = f"你选了{cn}色的气球，真好看！我们先画一个圆圆的气球身体吧～"
+    audio_url = ""
+    with request.app.state.sessionmaker() as db:
+        try:
+            _, tts_cfg = load_voice_config(db)
+            audio_bytes = await synthesize(tts_cfg["base_url"], tts_cfg["api_key"],
+                                           tts_cfg["model"], tts_cfg["voice"], text, tts_cfg["speed"])
+            rel = f"audio/{uuid.uuid4().hex}.mp3"
+            with open(f"{request.app.state.data_dir}/{rel}", "wb") as f:
+                f.write(audio_bytes)
+            audio_url = f"/api/files/{rel}"
+        except Exception as e:
+            print(f"turn/pick: TTS failed: {e}")
+        run = db.get(LessonRun, run_id)
+        if run is not None and run.status == "running":
+            run.pending_utterance = {"text": text, "audio_url": audio_url}
+            db.commit()
+    return {"ok": True, "color": color}

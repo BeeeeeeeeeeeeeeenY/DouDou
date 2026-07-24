@@ -279,5 +279,8 @@ def test_turn_pick_sets_selected_color(client, db):
     assert j == {"ok": True, "color": "yellow"}
     db.refresh(run)  # 端点另开会话提交，expire_on_commit=False 需 refresh
     assert run.selected_color == "yellow"
+    # 主动联动：选完色即触发画圆演示 + 队列一句语音确认（不用孩子说"选好了"）
+    assert run.pending_demo == "circle" and "circle" in (run.demoed_shapes or [])
+    assert run.pending_utterance and "黄" in run.pending_utterance["text"]
     # 无颜色/无 running run → ok False
     assert client.post("/turn/pick", json={"color": ""}).json()["ok"] is False
