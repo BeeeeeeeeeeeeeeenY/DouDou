@@ -1077,9 +1077,16 @@ fn run() -> std::io::Result<()> {
         // ---- state machine ----
         state = match state {
             State::Listening { last_pen } => match last_pen {
+                // 选色模式下停笔约 1s 就报色（不等 6s idle）——赶在孩子说"选好了"、
+                // 语音回合抢先跑之前把颜色报到服务器，治"圈黄说蓝"的时机赛跑。
                 Some(t)
                     if !pen_down
-                        && t.elapsed() >= idle_commit()
+                        && t.elapsed()
+                            >= (if swatch_boxes.is_empty() {
+                                idle_commit()
+                            } else {
+                                Duration::from_millis(1000)
+                            })
                         && user_ink.stroke_list().len().saturating_sub(committed_strokes) >= 1 =>
                 {
                     // A single new stroke commits — a child who draws one shape
