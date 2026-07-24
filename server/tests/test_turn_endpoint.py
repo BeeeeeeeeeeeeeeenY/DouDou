@@ -211,25 +211,18 @@ def _image_reply(n: int = 1) -> str:
 
 
 @respx.mock
-def test_turn_throttles_images(client, db):
-    # 彩图节流：每 run 至多每 3 次提交放行 1 张；首张放行，之后需等满 3 轮。
+def test_turn_drops_all_image_cards_for_now(client, db):
+    # 彩图卡暂时全去掉（真机上乱冒、颜色对不上，徒增胡说八道）——等"按位置认颜色"
+    # 做完再让它在对的时刻/对的颜色回来。现在 /turn 一律不下发 image 卡。
     _setup_course(client, db)
     from app import models
     run = models.LessonRun(lesson_id=db.query(models.Lesson).first().id, status="running")
     db.add(run); db.commit()
     respx.post("https://up.test/v1/chat/completions").mock(
         side_effect=[httpx.Response(200, text=_sse(_image_reply(i))) for i in (1, 2, 3)])
-
-    r1 = client.post("/turn", json=_min_body(turn_id="t-1"))
-    r2 = client.post("/turn", json=_min_body(turn_id="t-2"))
-    r3 = client.post("/turn", json=_min_body(turn_id="t-3"))
-
-    def has_image(resp):
-        return any(c["type"] == "image" for c in resp.json()["paper_cards"])
-
-    assert has_image(r1), "first submission should be allowed through"
-    assert not has_image(r2), "second submission within throttle window should be dropped"
-    assert not has_image(r3), "third submission within throttle window should be dropped"
+    for tid in ("t-1", "t-2", "t-3"):
+        r = client.post("/turn", json=_min_body(turn_id=tid))
+        assert not any(c["type"] == "image" for c in r.json()["paper_cards"])
 
 
 @respx.mock

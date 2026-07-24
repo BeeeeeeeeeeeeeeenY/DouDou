@@ -603,42 +603,38 @@ fn write_page_png(surf: &Surface, path: &str) -> std::io::Result<()> {
 /// unlike the legacy oracle's ink-bbox crop (`Ink::to_png`), since a card
 /// turn's server needs to see the full sheet (existing cards, margins, all
 /// of it) to place new ones without overlapping.
-fn page_png_bytes(surf: &Surface) -> std::io::Result<Vec<u8>> {
-    let (rgb, w, h) = page_rgb(surf);
-    let mut buf = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut buf, w as u32, h as u32);
-        enc.set_color(png::ColorType::Rgb);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut writer = enc.write_header().map_err(std::io::Error::other)?;
-        writer.write_image_data(&rgb).map_err(std::io::Error::other)?;
-    }
-    Ok(buf)
-}
-
-/// 整页真彩快照（2×2 降采样均值），供服务器视觉认孩子圈了哪个颜色。黑墨仍是黑，
-/// 选色盘的蓝/绿/黄这下能真彩传到服务器（灰度快照会把它们全变灰、认不出）。
-fn page_rgb(surf: &Surface) -> (Vec<u8>, usize, usize) {
-    let (w, h) = (surf.w / 2, surf.h / 2);
-    let mut out = vec![0u8; w * h * 3];
-    for y in 0..h {
-        for x in 0..w {
-            let mut acc = [0u32; 3];
-            for dy in 0..2 {
-                for dx in 0..2 {
-                    let px = surf.rgb((x * 2 + dx) as i32, (y * 2 + dy) as i32);
-                    for c in 0..3 {
-                        acc[c] += px[c] as u32;
+/// 只把**孩子自己的笔迹**栅格化成图发给服务器——而不是整屏合成图。根治「胡说
+/// 八道」：演示的圆、选色盘色块、彩图都是平板画的，绝不能混进"孩子的作品"让模型
+/// 当成孩子画的去夸/去数。只画 user_ink 的笔画向量（黑），白底，半分辨率灰度。
+fn child_ink_png(ink: &ink::Ink) -> std::io::Result<Vec<u8>> {
+    let (w, h) = (SCREEN_W / 2, SCREEN_H / 2);
+    let mut gray = vec![255u8; w * h]; // 白底
+    for stroke in ink.stroke_list() {
+        for &(x, y, r, _) in stroke {
+            let (cx, cy, rad) = (x / 2, y / 2, (r / 2).max(1));
+            for dy in -rad..=rad {
+                for dx in -rad..=rad {
+                    if dx * dx + dy * dy > rad * rad {
+                        continue;
+                    }
+                    let (px, py) = (cx + dx, cy + dy);
+                    if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
+                        gray[py as usize * w + px as usize] = 0; // 黑墨
                     }
                 }
             }
-            let o = (y * w + x) * 3;
-            for c in 0..3 {
-                out[o + c] = (acc[c] / 4) as u8;
-            }
         }
     }
-    (out, w, h)
+    let mut buf = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut buf, w as u32, h as u32);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_compression(png::Compression::Fast);
+        let mut writer = enc.write_header().map_err(std::io::Error::other)?;
+        writer.write_image_data(&gray).map_err(std::io::Error::other)?;
+    }
+    Ok(buf)
 }
 
 /// Wipe the page and start counting ink from zero: the page-turn action
@@ -1128,7 +1124,8 @@ fn run() -> std::io::Result<()> {
 
                         if turn::turn_mode_enabled() {
                             // ---- structured /turn path (Task 12) ----
-                            let page_bytes = match page_png_bytes(&surf) {
+                            // 只发孩子的笔迹（不发整屏合成图），服务器只看到孩子画的。
+                            let page_bytes = match child_ink_png(&user_ink) {
                                 Ok(b) => b,
                                 Err(e) => {
                                     eprintln!("riddle: turn page encode failed: {e}");

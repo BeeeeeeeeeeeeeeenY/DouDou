@@ -126,20 +126,15 @@ async def turn(req: TurnRequest, request: Request):
     # 从不发换页信号，靠服务器兜这一手。
     if req.page_state.ink_coverage >= 0.55:
         page_action = "new_page"
-    # 平板只承载画面：去掉 text 卡（DouDou 的话走手机语音）
-    cards = [c for c in cards if c.get("type") != "text"]
-    # 彩图节流：每 run 至多每 3 次提交 1 张；首张放行
+    # 平板只承载画面：去掉 text 卡（DouDou 的话走手机语音）。
+    # image 彩图卡暂时也全去掉——真机上它乱冒（选色时冒出个蓝气球、颜色还对不上），
+    # 徒增"胡说八道"。等做完"按位置认颜色"再让它在对的时刻、对的颜色出现。
+    cards = [c for c in cards if c.get("type") not in ("text", "image")]
     if active_run_id is not None:
         with request.app.state.sessionmaker() as db:
             run = db.get(LessonRun, active_run_id)
             if run is not None:
-                run.tablet_turns = (run.tablet_turns or 0) + 1
-                has_img = any(c.get("type") == "image" for c in cards)
-                allow_img = (run.last_image_turn or 0) == 0 or run.tablet_turns - run.last_image_turn >= 3
-                if has_img and allow_img:
-                    run.last_image_turn = run.tablet_turns
-                elif has_img:
-                    cards = [c for c in cards if c.get("type") != "image"]
+                run.tablet_turns = (run.tablet_turns or 0) + 1  # 保留计数供日后节流
                 db.commit()
     # 豆豆的话不再上平板卡片，而是入队给手机播报（两屏分离：平板只看画）。
     # TTS 失败绝不阻塞 /turn 响应——手机侧可只显示文字。
