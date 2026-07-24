@@ -187,3 +187,22 @@ def turn_next(request: Request):
         run.pending_swatches = None
         db.commit()
         return {"demo": demo, "command": command, "swatches": swatches}
+
+
+class PickBody(BaseModel):
+    color: str = ""
+
+
+@router.post("/turn/pick")
+def turn_pick(body: PickBody, request: Request):
+    """平板按位置报告孩子圈/点选中的颜色（不靠模型看图猜）。挂到当前房间，
+    语音回合据此让 DouDou 说对颜色。"""
+    color = (body.color or "").strip().lower()
+    with request.app.state.sessionmaker() as db:
+        run = (db.query(LessonRun).filter(LessonRun.status == "running")
+               .order_by(LessonRun.id.desc()).first())
+        if run is None or not color:
+            return {"ok": False}
+        run.selected_color = color
+        db.commit()
+        return {"ok": True, "color": color}

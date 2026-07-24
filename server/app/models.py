@@ -124,3 +124,4 @@ class LessonRun(Base):
     tablet_turns: Mapped[int] = mapped_column(default=0)                             # 本 run 平板提交计数（图节流）
     last_image_turn: Mapped[int] = mapped_column(default=0)                          # 上次出图时的 tablet_turns
     pending_swatches: Mapped[list | None] = mapped_column(JSON, nullable=True)       # 待平板显示的选色盘颜色，取用即清
+    selected_color: Mapped[str | None] = mapped_column(String(16), nullable=True)    # 孩子在平板上圈/点选中的颜色（设备按位置报，非视觉猜）

@@ -670,15 +670,18 @@ fn swatch_bgr(name: &str) -> Option<[u8; 3]> {
 }
 
 /// 选色盘：在平板上一行画出几个大彩色方块，给孩子用笔圈一个挑颜色。只在
-/// Rgb32 takeover surface 出彩（qtfb 灰阶跳过）。方块留在页上，直到清屏。
-fn show_swatches(surf: &mut Surface, disp: &display::Display, colors: &[String]) {
+/// Rgb32 takeover surface 出彩（qtfb 灰阶跳过）。方块留在页上，直到孩子选。
+/// 返回每个方块的 (颜色名, x, y, w, h)——主循环据此把孩子圈的位置映射成颜色。
+fn show_swatches(surf: &mut Surface, disp: &display::Display, colors: &[String])
+    -> Vec<(String, i32, i32, i32, i32)> {
+    let mut boxes = Vec::new();
     if surf.fmt != surface::PixFmt::Rgb32 {
         eprintln!("riddle: swatches skipped (non-Rgb32 surface)");
-        return;
+        return boxes;
     }
     let names: Vec<&String> = colors.iter().take(4).collect();
     if names.is_empty() {
-        return;
+        return boxes;
     }
     let (bw, bh, gap) = (240i32, 240i32, 70i32);
     let n = names.len() as i32;
@@ -691,8 +694,36 @@ fn show_swatches(surf: &mut Surface, disp: &display::Display, colors: &[String])
         let bgra: Vec<u8> = (0..(bw * bh)).flat_map(|_| [b, g, r, 0xFF]).collect();
         surf.paste_rect(x as usize, y0 as usize, bw as usize, bh as usize, &bgra);
         disp.swap_raw(x, y0, bw, bh, 5, 0);
+        boxes.push(((*name).clone(), x, y0, bw, bh));
     }
     eprintln!("riddle: swatches shown: {names:?}");
+    boxes
+}
+
+/// 把一个点映射到最近的色块颜色（欧氏距离到色块中心）。用于孩子圈/点选色。
+fn nearest_swatch(boxes: &[(String, i32, i32, i32, i32)], px: i32, py: i32) -> Option<String> {
+    boxes
+        .iter()
+        .min_by_key(|(_, x, y, w, h)| {
+            let (cx, cy) = (x + w / 2, y + h / 2);
+            let (dx, dy) = ((px - cx) as i64, (py - cy) as i64);
+            dx * dx + dy * dy
+        })
+        .map(|(name, ..)| name.clone())
+}
+
+/// 彩色残影专清：色块走 mode 5 彩色波形，灰阶全刷压不净残影。清屏时先黑闪一下
+/// 再刷白（翻转波形），把彩色残影打掉，再回到普通白底。
+fn clear_page_hard(
+    surf: &mut Surface,
+    disp: &display::Display,
+    user_ink: &mut ink::Ink,
+    committed_strokes: &mut usize,
+    page_id: &mut u64,
+) {
+    surf.fill_rect(0, 0, SCREEN_W, SCREEN_H, BLACK);
+    disp.full_refresh(surf.w, surf.h);
+    turn_the_page(surf, disp, user_ink, committed_strokes, page_id); // 再刷白+清墨+徽标
 }
 
 /// A small badge pinned to the top edge, shown ONLY in /turn (lesson) mode, so
@@ -862,6 +893,9 @@ fn run() -> std::io::Result<()> {
     );
     let mut next_poll = Instant::now() + demo_poll_every;
     let mut poll_rx: Option<mpsc::Receiver<Result<turn::NextResponse, String>>> = None;
+    // 选色模式：非空＝平板正显示选色盘，孩子这一笔是"圈选颜色"而非画画。
+    // 每项 (颜色名, x, y, w, h)。孩子圈完→按位置报颜色+清屏+退出选色模式。
+    let mut swatch_boxes: Vec<(String, i32, i32, i32, i32)> = Vec::new();
 
     eprintln!("riddle: the diary is open");
     draw_lesson_badge(&mut surf, &disp); // 上课模式：顶部徽标标示已生效
@@ -1059,7 +1093,20 @@ fn run() -> std::io::Result<()> {
                     // last commit, not the whole page's history: older,
                     // already-answered strokes stay on the page untouched.
                     let new_bbox = bbox_of(&user_ink.stroke_list()[committed_strokes..]);
-                    if region_all_white(&surf, new_bbox) {
+                    if !swatch_boxes.is_empty() {
+                        // 选色模式：这一笔是"圈选颜色"，不是画画。按圈的位置认出哪个色块→
+                        // 报颜色给服务器→硬清屏退出选色。绝不走 /turn（省得当成画作乱夸）。
+                        let (bx, by, bw, bh) = new_bbox.rect();
+                        if let Some(color) = nearest_swatch(&swatch_boxes, bx + bw / 2, by + bh / 2) {
+                            eprintln!("riddle: color picked: {color}");
+                            turn::report_color(color);
+                        }
+                        swatch_boxes.clear();
+                        clear_page_hard(
+                            &mut surf, &disp, &mut user_ink, &mut committed_strokes, &mut page_id,
+                        );
+                        State::Listening { last_pen: None }
+                    } else if region_all_white(&surf, new_bbox) {
                         // The new ink was erased before the pause: nothing to
                         // commit (and no phantom "?" from erased strokes).
                         // Mark it seen so it stops counting as "new ink"
@@ -1217,14 +1264,15 @@ fn run() -> std::io::Result<()> {
                                     // 先执行清屏命令，再看有无演示。
                                     if next.command.as_deref() == Some("clear") {
                                         eprintln!("riddle: /turn/next: clear");
-                                        turn_the_page(
+                                        swatch_boxes.clear();
+                                        clear_page_hard(
                                             &mut surf, &disp, &mut user_ink,
                                             &mut committed_strokes, &mut page_id,
                                         );
                                     }
                                     if let Some(colors) = next.swatches {
                                         if !colors.is_empty() {
-                                            show_swatches(&mut surf, &disp, &colors);
+                                            swatch_boxes = show_swatches(&mut surf, &disp, &colors);
                                         }
                                     }
                                     if let Some(demo) = next.demo {

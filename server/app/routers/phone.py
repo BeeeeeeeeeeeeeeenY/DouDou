@@ -134,6 +134,7 @@ async def voice_turn(
     # 课程模式：run 有效且 running 时注入课时脚本（短事务，取完即关）
     lesson_context = ""
     active_run_id: int | None = None
+    selected_color: str | None = None
     if lesson_run_id is not None:
         with request.app.state.sessionmaker() as db:  # type: Session
             run = db.get(LessonRun, lesson_run_id)
@@ -143,6 +144,13 @@ async def voice_turn(
                     recap = latest_recap(db, lesson.curriculum_id)
                     lesson_context = render_lesson_script(lesson.script_text, recap)
                     active_run_id = run.id
+                    selected_color = run.selected_color
+    # 设备按位置报的确定颜色——直接告诉模型，别再靠看图猜（治"选黄说蓝"）
+    if selected_color:
+        cn = {"blue": "蓝", "green": "绿", "yellow": "黄"}.get(selected_color, selected_color)
+        lesson_context += (
+            f"\n\n【孩子已选颜色·确定】孩子刚在平板上选了「{cn}色」。就用{cn}色回应"
+            f"（如「你选了{cn}色的气球，真好看！」），别再问颜色、绝不说别的颜色。")
 
     # 让语音豆豆"看见"孩子此刻在平板上画的整页（模型有视觉）：只取【本房间】
     # （当前 lesson_run）内的平板画，避免上一节课的脏数据串进来。新课刚开、
@@ -196,8 +204,8 @@ async def voice_turn(
                     if runner.demo_shape not in done:
                         run.pending_demo = runner.demo_shape
                         run.demoed_shapes = done + [runner.demo_shape]
-                        run.pending_command = "clear"  # 进入画画阶段：先清掉选色盘/圈选痕迹再演示
                         db.commit()
+                        # 注：选色盘现在由设备在孩子圈选时就地清掉，不再靠 demo 连带清
                 if runner.colors:  # 语音问颜色那句：挂选色盘给平板显示
                     run.pending_swatches = runner.colors
                     db.commit()

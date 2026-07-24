@@ -27,6 +27,7 @@ def _migrate(engine) -> None:
     _ensure_column(engine, "lesson_runs", "tablet_turns", "tablet_turns INTEGER DEFAULT 0")
     _ensure_column(engine, "lesson_runs", "last_image_turn", "last_image_turn INTEGER DEFAULT 0")
     _ensure_column(engine, "lesson_runs", "pending_swatches", "pending_swatches JSON")
+    _ensure_column(engine, "lesson_runs", "selected_color", "selected_color VARCHAR(16)")
 
 
 def make_sessionmaker(data_dir: str):

@@ -195,6 +195,20 @@ pub fn fetch_next(tx: Sender<Result<NextResponse, String>>) {
     });
 }
 
+/// 报告孩子在平板上圈/点选中的颜色（POST `{RIDDLE_TURN_URL}/pick`）。后台线程、
+/// 一次性、失败静默——服务器据此让语音 DouDou 说对颜色，不靠看图猜。
+pub fn report_color(color: String) {
+    std::thread::spawn(move || {
+        let Ok(base) = std::env::var("RIDDLE_TURN_URL") else { return };
+        let url = format!("{}/pick", base.trim_end_matches('/'));
+        let body = serde_json::json!({ "color": color }).to_string();
+        let _ = ureq::post(&url)
+            .set("content-type", "application/json")
+            .timeout(Duration::from_secs(8))
+            .send_string(&body);
+    });
+}
+
 /// Whether the structured `/turn` path is configured at all — either a real
 /// endpoint or a local mock file. `main.rs` gates its whole new commit path
 /// on this; when it's false, behavior is bit-for-bit the legacy oracle path.

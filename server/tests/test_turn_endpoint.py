@@ -268,3 +268,16 @@ def test_turn_next_serves_and_clears_swatches(client, db):
     j = client.get("/turn/next").json()
     assert j["swatches"] == ["blue", "green", "yellow"]
     assert client.get("/turn/next").json()["swatches"] is None   # clear-on-fetch
+
+
+def test_turn_pick_sets_selected_color(client, db):
+    from app import models
+    _setup_course(client, db)
+    run = models.LessonRun(lesson_id=db.query(models.Lesson).first().id, status="running")
+    db.add(run); db.commit()
+    j = client.post("/turn/pick", json={"color": "Yellow"}).json()
+    assert j == {"ok": True, "color": "yellow"}
+    db.refresh(run)  # 端点另开会话提交，expire_on_commit=False 需 refresh
+    assert run.selected_color == "yellow"
+    # 无颜色/无 running run → ok False
+    assert client.post("/turn/pick", json={"color": ""}).json()["ok"] is False
