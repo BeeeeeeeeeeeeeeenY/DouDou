@@ -147,6 +147,9 @@ pub fn fetch(json_body: String, tx: Sender<Result<cards::TurnResponse, String>>)
 pub struct NextResponse {
     pub demo: Option<DemoDirective>,
     pub command: Option<String>,
+    /// 选色盘：要在平板上显示给孩子挑的颜色名（blue/green/yellow）。孩子用笔圈
+    /// 一个、说"选好了"，服务器经 voice-turn 视觉认出圈的颜色。取用即清。
+    pub swatches: Option<Vec<String>>,
 }
 
 /// A voice-triggered demo: which shape to draw. `place`/`pace` are advisory

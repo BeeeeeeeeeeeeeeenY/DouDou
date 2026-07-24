@@ -638,6 +638,42 @@ fn turn_the_page(
     draw_lesson_badge(surf, disp); // 翻页清屏后重画上课徽标
 }
 
+/// 颜色名→(B,G,R)，标定干净色（蓝/绿/黄），红/橙/粉偏色不入盘。
+fn swatch_bgr(name: &str) -> Option<[u8; 3]> {
+    match name {
+        "blue" => Some([180, 60, 30]),
+        "green" => Some([65, 150, 35]),
+        "yellow" => Some([20, 225, 255]),
+        _ => None,
+    }
+}
+
+/// 选色盘：在平板上一行画出几个大彩色方块，给孩子用笔圈一个挑颜色。只在
+/// Rgb32 takeover surface 出彩（qtfb 灰阶跳过）。方块留在页上，直到清屏。
+fn show_swatches(surf: &mut Surface, disp: &display::Display, colors: &[String]) {
+    if surf.fmt != surface::PixFmt::Rgb32 {
+        eprintln!("riddle: swatches skipped (non-Rgb32 surface)");
+        return;
+    }
+    let names: Vec<&String> = colors.iter().take(4).collect();
+    if names.is_empty() {
+        return;
+    }
+    let (bw, bh, gap) = (240i32, 240i32, 70i32);
+    let n = names.len() as i32;
+    let total = n * bw + (n - 1) * gap;
+    let x0 = (SCREEN_W as i32 - total) / 2;
+    let y0 = 440i32;
+    for (i, name) in names.iter().enumerate() {
+        let Some([b, g, r]) = swatch_bgr(name) else { continue };
+        let x = x0 + i as i32 * (bw + gap);
+        let bgra: Vec<u8> = (0..(bw * bh)).flat_map(|_| [b, g, r, 0xFF]).collect();
+        surf.paste_rect(x as usize, y0 as usize, bw as usize, bh as usize, &bgra);
+        disp.swap_raw(x, y0, bw, bh, 5, 0);
+    }
+    eprintln!("riddle: swatches shown: {names:?}");
+}
+
 /// A small badge pinned to the top edge, shown ONLY in /turn (lesson) mode, so
 /// the user can tell at a glance that DouDou lesson mode is live (vs the legacy
 /// diary). No-op outside turn mode. Redrawn after every page turn (the sheet
@@ -1163,6 +1199,11 @@ fn run() -> std::io::Result<()> {
                                             &mut surf, &disp, &mut user_ink,
                                             &mut committed_strokes, &mut page_id,
                                         );
+                                    }
+                                    if let Some(colors) = next.swatches {
+                                        if !colors.is_empty() {
+                                            show_swatches(&mut surf, &disp, &colors);
+                                        }
                                     }
                                     if let Some(demo) = next.demo {
                                         let mut map = layout::InkMap::from_surface(&surf);

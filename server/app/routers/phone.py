@@ -196,6 +196,7 @@ async def voice_turn(
                     if runner.demo_shape not in done:
                         run.pending_demo = runner.demo_shape
                         run.demoed_shapes = done + [runner.demo_shape]
+                        run.pending_command = "clear"  # 进入画画阶段：先清掉选色盘/圈选痕迹再演示
                         db.commit()
                 if runner.colors:  # 语音问颜色那句：挂选色盘给平板显示
                     run.pending_swatches = runner.colors
