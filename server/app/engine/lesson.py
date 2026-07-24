@@ -1,4 +1,5 @@
 import json
+import os
 
 from sqlalchemy import and_, or_
 
@@ -155,7 +156,10 @@ def run_has_drawing(db, run: LessonRun) -> bool:
 
 
 def advance_pointer(db, run: LessonRun) -> None:
-    """仅当课程指针仍指向本课时推进；末课完成后指针置空（= 本轮完成）。"""
+    """仅当课程指针仍指向本课时推进；末课完成后指针置空（= 本轮完成）。
+    测试期设 DOUDOU_PIN_LESSON=1 可钉住当前课、完课不推进（免得反复跳下一课）。"""
+    if os.environ.get("DOUDOU_PIN_LESSON"):
+        return
     lesson = db.get(Lesson, run.lesson_id)
     cur = db.get(Curriculum, lesson.curriculum_id)
     if cur is None or cur.current_lesson_id != lesson.id:
