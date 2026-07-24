@@ -604,16 +604,41 @@ fn write_page_png(surf: &Surface, path: &str) -> std::io::Result<()> {
 /// turn's server needs to see the full sheet (existing cards, margins, all
 /// of it) to place new ones without overlapping.
 fn page_png_bytes(surf: &Surface) -> std::io::Result<Vec<u8>> {
-    let (gray, w, h) = page_gray(surf);
+    let (rgb, w, h) = page_rgb(surf);
     let mut buf = Vec::new();
     {
         let mut enc = png::Encoder::new(&mut buf, w as u32, h as u32);
-        enc.set_color(png::ColorType::Grayscale);
+        enc.set_color(png::ColorType::Rgb);
         enc.set_depth(png::BitDepth::Eight);
         let mut writer = enc.write_header().map_err(std::io::Error::other)?;
-        writer.write_image_data(&gray).map_err(std::io::Error::other)?;
+        writer.write_image_data(&rgb).map_err(std::io::Error::other)?;
     }
     Ok(buf)
+}
+
+/// 整页真彩快照（2×2 降采样均值），供服务器视觉认孩子圈了哪个颜色。黑墨仍是黑，
+/// 选色盘的蓝/绿/黄这下能真彩传到服务器（灰度快照会把它们全变灰、认不出）。
+fn page_rgb(surf: &Surface) -> (Vec<u8>, usize, usize) {
+    let (w, h) = (surf.w / 2, surf.h / 2);
+    let mut out = vec![0u8; w * h * 3];
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0u32; 3];
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let px = surf.rgb((x * 2 + dx) as i32, (y * 2 + dy) as i32);
+                    for c in 0..3 {
+                        acc[c] += px[c] as u32;
+                    }
+                }
+            }
+            let o = (y * w + x) * 3;
+            for c in 0..3 {
+                out[o + c] = (acc[c] / 4) as u8;
+            }
+        }
+    }
+    (out, w, h)
 }
 
 /// Wipe the page and start counting ink from zero: the page-turn action

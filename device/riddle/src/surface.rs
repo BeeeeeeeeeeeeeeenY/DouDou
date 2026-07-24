@@ -108,6 +108,30 @@ impl Surface {
         }
     }
 
+    /// RGB 0..255 of a pixel — for the color page snapshot (选色盘要让服务器视觉
+    /// 看到真彩，灰度快照会把彩色色块变灰、认不出圈了哪个颜色）。
+    #[inline]
+    pub fn rgb(&self, x: i32, y: i32) -> [u8; 3] {
+        if x < 0 || y < 0 || x >= self.w as i32 || y >= self.h as i32 {
+            return [255, 255, 255];
+        }
+        let b = self.buf_ref();
+        match self.fmt {
+            PixFmt::Rgb565 => {
+                let i = y as usize * self.stride + x as usize * 2;
+                let px = (b[i] as u16) | ((b[i + 1] as u16) << 8);
+                let r = (((px >> 11) & 0x1f) as u32 * 255 / 31) as u8;
+                let g = (((px >> 5) & 0x3f) as u32 * 255 / 63) as u8;
+                let bl = ((px & 0x1f) as u32 * 255 / 31) as u8;
+                [r, g, bl]
+            }
+            PixFmt::Rgb32 => {
+                let i = y as usize * self.stride + x as usize * 4;
+                [b[i + 2], b[i + 1], b[i]]  // 缓冲是 BGRA → 取 R,G,B
+            }
+        }
+    }
+
     pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, c: u16) {
         let x1 = (x + w).min(self.w);
         let y1 = (y + h).min(self.h);
