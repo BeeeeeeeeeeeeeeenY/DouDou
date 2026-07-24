@@ -406,22 +406,57 @@ fn plan_sketch(
     out
 }
 
-/// A voice-triggered demonstration: turn a shape name (from `/turn/next`'s
-/// `demo.shape`) into the same solid-ink slow sketch a `Sketch` card would
-/// draw, placed in a blank area so it never covers the child's ink. Empty
-/// for an unknown shape or a full page — the caller just skips the demo.
+/// Dense unit-box strokes for a demo shape — many more points than the
+/// `shape_strokes` template so the animation reads as a *hand-drawn* stroke
+/// (visible 笔顺) instead of snapping in. Only "circle" is densified today;
+/// other shapes fall back to the sparse template.
+fn demo_strokes(shape: &str) -> Option<Vec<Vec<(f32, f32)>>> {
+    use std::f32::consts::TAU;
+    match shape {
+        "circle" => Some(vec![(0..=120)
+            .map(|i| {
+                let a = i as f32 / 120.0 * TAU;
+                (0.5 + 0.45 * a.cos(), 0.5 + 0.45 * a.sin())
+            })
+            .collect()]),
+        _ => shape_strokes(shape),
+    }
+}
+
+/// Points drawn per animation frame for a demo — low so the circle is drawn
+/// slowly, pen-like. Env `RIDDLE_DEMO_PPF` (default 2) tunes the speed
+/// on-device without a rebuild (higher = faster).
+fn demo_ppf() -> i32 {
+    std::env::var("RIDDLE_DEMO_PPF").ok().and_then(|s| s.parse().ok()).filter(|&n| n > 0).unwrap_or(2)
+}
+
+/// A voice-triggered demonstration: draw the shape as a solid-ink stroke,
+/// slowly (visible 笔顺), in a blank area so it never covers the child's ink.
+/// Empty for an unknown shape or a full page — the caller just skips the demo.
 pub fn plan_demo(shape: &str, map: &mut layout::InkMap) -> Vec<RenderPlan> {
-    let Some(strokes) = shape_strokes(shape) else {
+    let Some(strokes) = demo_strokes(shape) else {
         eprintln!("riddle: demo dropped (unknown shape {shape:?})");
         return Vec::new();
     };
+    if strokes.iter().all(|s| s.is_empty()) {
+        return Vec::new();
+    }
     let common = cards::CardCommon {
         place: cards::Place::BlankArea,
         anchor_norm: None,
         size: cards::Size::M,
-        pace: cards::Pace::Slow, // 慢速逐笔，孩子看得清笔序
+        pace: cards::Pace::Slow,
     };
-    plan_sketch(&common, &strokes, map, layout::Anchor::None)
+    // 复用 plan_sketch 的摆位/缩放，但用 demo 专用慢速 ppf 覆盖，笔顺可见。
+    let Some((size, x0, y0)) = resolve_boxed(map, &common, layout::Anchor::None) else {
+        eprintln!("riddle: demo dropped (no room)");
+        return Vec::new();
+    };
+    let box_px = size_box(size);
+    let mapped = sketch_geometry(&strokes, x0, y0, box_px, box_px);
+    let mut out = Vec::new();
+    commit(make_plan(mapped, surface::BLACK, demo_ppf()), map, &mut out);
+    out
 }
 
 fn sketch_plan_in_rect(
@@ -1112,14 +1147,16 @@ mod tests {
     }
 
     #[test]
-    fn plan_demo_circle_yields_slow_solid_ink_sketch_in_bounds() {
+    fn plan_demo_circle_yields_slow_dense_solid_ink_sketch_in_bounds() {
         let mut map = InkMap::new(1620, 2160);
         let plans = plan_demo("circle", &mut map);
         assert_eq!(plans.len(), 1, "one demo sketch plan");
         let p = &plans[0];
-        assert!(!p.strokes.is_empty(), "circle carries ink");
+        let pts: usize = p.strokes.iter().map(Vec::len).sum();
+        assert!(pts >= 100, "圆要加密才有笔顺（点数 {pts}）");
         assert_eq!(p.color, surface::BLACK, "实心墨迹，非淡墨骨架");
-        assert_eq!(p.points_per_frame, ppf(Pace::Slow), "慢速逐笔");
+        assert_eq!(p.points_per_frame, demo_ppf(), "demo 专用慢速 ppf");
+        assert!(p.points_per_frame <= 3, "慢到看得清笔顺");
         let (x, y, w, h) = p.region.rect();
         assert!(x >= 0 && y >= 0 && x + w <= 1620 && y + h <= 2160, "in bounds: {:?}", p.region.rect());
     }
