@@ -40,7 +40,10 @@ def create_app(data_dir: str | None = None) -> FastAPI:
                 raise HTTPException(404)
             full = os.path.normpath(os.path.join(dist, path))
             if full.startswith(dist + os.sep) and os.path.isfile(full):
-                return FileResponse(full)
-            return FileResponse(os.path.join(dist, "index.html"))
+                return FileResponse(full)  # 带 hash 的静态资源可长缓存
+            # index.html 绝不缓存：手机刷新总能拿到最新页（指向最新 hash 的 JS）。
+            # 否则移动端浏览器会一直用缓存的旧 index.html→加载旧 JS→改了看不到。
+            return FileResponse(os.path.join(dist, "index.html"),
+                                headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
     return app
